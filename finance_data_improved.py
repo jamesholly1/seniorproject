@@ -3,7 +3,7 @@ import streamlit as st
 import threading
 from typing import Dict, List
 import logging
-from stooq_data import get_historical_data as stooq_get_historical_data, get_stock_info as stooq_get_stock_info, get_multiple_stock_info as stooq_get_multiple_stock_info
+from stooq_data import get_historical_data as itick_get_historical_data, get_stock_info as itick_get_stock_info, get_multiple_stock_info as itick_get_multiple_stock_info
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -17,26 +17,25 @@ _CACHE_LOCK = threading.Lock()
 def get_stock_info(symbol: str) -> dict:
     """
     Get stock information with caching and rate limit handling.
-    Now uses Stooq data source (no API key required).
+    Uses iTick data source.
     """
-    return stooq_get_stock_info(symbol)
+    return itick_get_stock_info(symbol)
 
 
 def get_multiple_stock_info(symbols: List[str], max_workers: int = 4) -> Dict[str, dict]:
     """
-    Get stock information for multiple symbols using Stooq data source.
-    Now uses Stooq (no API key required) with caching for efficiency.
+    Get stock information for multiple symbols using iTick data source.
     """
-    return stooq_get_multiple_stock_info(symbols, max_workers)
+    return itick_get_multiple_stock_info(symbols, max_workers)
 
 
 @st.cache_data(ttl=600, show_spinner=False)  # Cache for 10 minutes, no spinner
 def get_historical_data(symbol: str, period: str = "1y") -> pandas.DataFrame:
     """
     Get historical data with caching and rate limit handling.
-    Now uses Stooq data source (no API key required).
+    Uses iTick data source.
     """
-    return stooq_get_historical_data(symbol, period)
+    return itick_get_historical_data(symbol, period)
 
 
 # Backward compatibility functions

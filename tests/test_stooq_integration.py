@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Test script to verify Stooq integration works correctly.
-This script tests the new stooq_data module and updated finance modules.
+Test script to verify iTick integration works correctly.
+This script tests the stooq_data module (now backed by iTick) and finance modules.
 """
 
 import sys
@@ -9,9 +9,9 @@ import traceback
 from datetime import datetime
 
 def test_stooq_data_module():
-    """Test the stooq_data module directly"""
+    """Test the stooq_data module (iTick-backed) directly"""
     print("=" * 60)
-    print("Testing stooq_data.py module")
+    print("Testing stooq_data.py module (iTick backend)")
     print("=" * 60)
     
     try:
@@ -56,7 +56,7 @@ def test_stooq_data_module():
             else:
                 print(f"❌ {symbol}: Missing from results")
         
-        print("\n✅ stooq_data module tests completed successfully")
+        print("\n✅ iTick data module tests completed successfully")
         return True
         
     except Exception as e:
@@ -137,7 +137,7 @@ def test_edge_cases():
 
 def main():
     """Run all tests"""
-    print("Stooq Integration Test Suite")
+    print("iTick Integration Test Suite")
     print(f"Started at: {datetime.now()}")
     print("=" * 60)
     
@@ -163,7 +163,8 @@ def main():
     
     print(f"\nOverall Result: {'✅ ALL TESTS PASSED' if all_tests_passed else '❌ SOME TESTS FAILED'}")
     print(f"Completed at: {datetime.now()}")
-    
+    print("\nNote: data is sourced from iTick (api0.itick.org)")
+
     return 0 if all_tests_passed else 1
 
 if __name__ == "__main__":
