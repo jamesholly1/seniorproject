@@ -1,124 +1,90 @@
 #!/usr/bin/env python3
-"""
-Test script for authentication integration with main.py
-Tests the complete authentication flow and database integration
-"""
+"""Integration tests for authentication flow."""
 
 import sys
-import os
 from database import (
-    initialize_database, create_user, authenticate_user, 
-    add_user_ticker, get_user_tickers, remove_user_ticker, clear_user_tickers
+    initialize_database, create_user, authenticate_user,
+    add_user_ticker, get_user_tickers, remove_user_ticker, clear_user_tickers,
+    MAX_FAILED_ATTEMPTS,
 )
 
+
 def test_authentication_flow():
-    """Test the complete authentication and portfolio flow"""
     print("Testing authentication and portfolio integration...")
-    
-    # Initialize database
     initialize_database()
-    print("✓ Database initialized")
-    
-    # Test user creation
+
     test_username = "test_auth_user"
+    test_email = "test_auth_user@example.com"
     test_password = "secure_password_123"
-    
-    # Create test user
-    if create_user(test_username, test_password):
-        print("✓ User created successfully")
-    else:
-        print("! User already exists, continuing with existing user")
-    
-    # Test authentication
+
+    ok, _ = create_user(test_username, test_email, test_password)
+    if not ok:
+        print("User may already exist, continuing with existing user.")
+
     user_id = authenticate_user(test_username, test_password)
-    if user_id:
-        print(f"✓ User authenticated successfully (ID: {user_id})")
-    else:
-        print("❌ Authentication failed")
-        return False
-    
-    # Test portfolio operations
-    test_tickers = ["AAPL", "GOOGL", "MSFT"]
-    
-    # Add tickers
-    for ticker in test_tickers:
-        if add_user_ticker(user_id, ticker):
-            print(f"✓ Added {ticker} to portfolio")
-        else:
-            print(f"! {ticker} already in portfolio or failed to add")
-    
-    # Get user tickers
-    user_tickers = get_user_tickers(user_id)
-    print(f"✓ Retrieved user portfolio: {user_tickers}")
-    
-    # Test removing a ticker
-    if user_tickers and remove_user_ticker(user_id, user_tickers[0]):
-        print(f"✓ Removed {user_tickers[0]} from portfolio")
-    
-    # Test clearing portfolio
-    if clear_user_tickers(user_id):
-        print("✓ Portfolio cleared successfully")
-    
-    # Verify portfolio is empty
-    empty_portfolio = get_user_tickers(user_id)
-    if len(empty_portfolio) == 0:
-        print("✓ Portfolio is empty after clearing")
-    else:
-        print(f"❌ Portfolio not empty: {empty_portfolio}")
-        return False
-    
-    print("\n🎉 All authentication and portfolio tests passed!")
+    assert user_id is not None, "Authentication failed"
+
+    for ticker in ["AAPL", "GOOGL", "MSFT"]:
+        add_user_ticker(user_id, ticker)
+
+    assert len(get_user_tickers(user_id)) >= 1
+    clear_user_tickers(user_id)
+    assert len(get_user_tickers(user_id)) == 0
+
+    print("Authentication and portfolio integration passed.")
     return True
 
+
+def test_lockout_after_failed_attempts():
+    print("Testing account lockout...")
+    initialize_database()
+
+    username = "lockout_test_user"
+    email = "lockout_test_user@example.com"
+    password = "correct_password_abc"
+    create_user(username, email, password)
+
+    for _ in range(MAX_FAILED_ATTEMPTS):
+        assert authenticate_user(username, "wrong_password") is None
+
+    assert authenticate_user(username, password) is None, \
+        "Account should be locked after threshold reached"
+
+    print("Lockout test passed.")
+    return True
+
+
 def test_main_import():
-    """Test that main.py can be imported without errors"""
     try:
         import main
-        print("✓ main.py imported successfully")
-        
-        # Check that required functions exist
-        required_functions = [
-            'main', 'show_portfolio_page', 'show_landing_page', 
-            'show_login_form', 'show_register_form'
-        ]
-        
-        for func_name in required_functions:
-            if hasattr(main, func_name):
-                print(f"✓ Function {func_name} exists")
-            else:
-                print(f"❌ Function {func_name} missing")
-                return False
-        
+        for func in ["main", "show_portfolio_page", "show_landing_page",
+                     "show_login_form", "show_register_form"]:
+            assert hasattr(main, func), f"Function {func} missing"
+        print("main.py import test passed.")
         return True
-        
     except Exception as e:
-        print(f"❌ Failed to import main.py: {e}")
+        print(f"Failed to import main.py: {e}")
         return False
 
+
 def main():
-    """Run all integration tests"""
     print("Starting authentication integration tests...\n")
-    
     try:
-        # Test main.py import
         if not test_main_import():
-            print("\n❌ Main import tests failed")
             sys.exit(1)
-        
-        print()
-        
-        # Test authentication flow
         if not test_authentication_flow():
-            print("\n❌ Authentication flow tests failed")
             sys.exit(1)
-        
-        print("\n🎉 All integration tests passed successfully!")
-        print("\nThe landing page with authentication is ready!")
+        if not test_lockout_after_failed_attempts():
+            sys.exit(1)
+        print("\nAll integration tests passed.")
         print("Run 'streamlit run main.py' to start the application.")
-        
-    except Exception as e:
-        print(f"\n❌ Unexpected error: {e}")
+    except AssertionError as e:
+        print(f"\nTest failed: {e}")
         sys.exit(1)
+    except Exception as e:
+        print(f"\nUnexpected error: {e}")
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
