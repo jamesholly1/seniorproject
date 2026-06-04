@@ -492,28 +492,26 @@ def show_login_form():
     Display the login form
     """
     st.subheader("🔑 Login to Your Account")
-    
-    # Trading disclaimer
+
     st.info("""
-    📢 **Important Notice**: This platform is for portfolio tracking and analysis only. 
-    **You cannot execute trades through this application.** 
-    
+    📢 **Important Notice**: This platform is for portfolio tracking and analysis only.
+    **You cannot execute trades through this application.**
+
     For actual stock trading, please use your preferred brokerage platform such as:
     - Fidelity, Charles Schwab, E*TRADE, TD Ameritrade, Robinhood, etc.
     """)
-    
+
     with st.form("login_form"):
         username = st.text_input("Username", placeholder="Enter your username")
         password = st.text_input("Password", type="password", placeholder="Enter your password")
-        
+
         col1, col2, col3 = st.columns([1, 1, 1])
-        
+
         with col1:
             if st.form_submit_button("Login", use_container_width=True, type="primary"):
                 if username and password:
                     user_id = authenticate_user(username, password)
                     if user_id:
-                        # Successful login
                         st.session_state.authenticated = True
                         st.session_state.user_id = user_id
                         st.session_state.username = username
@@ -521,10 +519,13 @@ def show_login_form():
                         st.success(f"Welcome back, {username}!")
                         st.rerun()
                     else:
-                        st.error("Invalid username or password. Please try again.")
+                        st.error(
+                            "Login failed. Check your credentials, or try again "
+                            "in a few minutes if you've had repeated failures."
+                        )
                 else:
                     st.warning("Please enter both username and password.")
-        
+
         with col3:
             if st.form_submit_button("Back", use_container_width=True):
                 st.session_state.current_page = 'landing'
@@ -536,34 +537,30 @@ def show_register_form():
     Display the registration form
     """
     st.subheader("📝 Create New Account")
-    
+
     with st.form("register_form"):
-        username = st.text_input("Username", placeholder="Choose a username")
-        password = st.text_input("Password", type="password", placeholder="Choose a password")
-        confirm_password = st.text_input("Confirm Password", type="password", placeholder="Confirm your password")
-        
+        username = st.text_input("Username", placeholder="3-32 characters")
+        email = st.text_input("Email", placeholder="you@example.com")
+        password = st.text_input("Password", type="password", placeholder="At least 8 characters")
+        confirm_password = st.text_input("Confirm Password", type="password", placeholder="Re-enter your password")
+
         col1, col2, col3 = st.columns([1, 1, 1])
-        
+
         with col1:
             if st.form_submit_button("Create Account", use_container_width=True, type="primary"):
-                if username and password and confirm_password:
-                    if password != confirm_password:
-                        st.error("Passwords do not match. Please try again.")
-                    elif len(password) < 6:
-                        st.error("Password must be at least 6 characters long.")
-                    elif len(username) < 3:
-                        st.error("Username must be at least 3 characters long.")
-                    else:
-                        # Try to create user
-                        if create_user(username, password):
-                            st.success("Account created successfully! Please login.")
-                            st.session_state.current_page = 'login'
-                            st.rerun()
-                        else:
-                            st.error("Username already exists. Please choose a different username.")
-                else:
+                if not (username and email and password and confirm_password):
                     st.warning("Please fill in all fields.")
-        
+                elif password != confirm_password:
+                    st.error("Passwords do not match.")
+                else:
+                    success, message = create_user(username, email, password)
+                    if success:
+                        st.success("Account created. Please log in.")
+                        st.session_state.current_page = 'login'
+                        st.rerun()
+                    else:
+                        st.error(message)
+
         with col3:
             if st.form_submit_button("Back", use_container_width=True):
                 st.session_state.current_page = 'landing'

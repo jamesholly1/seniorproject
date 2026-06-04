@@ -7,4 +7,5 @@ plotly>=5.5.0
 newsapi-python>=0.2.6
 streamlit-sortables>=0.2.0
 requests>=2.25.0
+argon2-cffi>=23.1.0
 
