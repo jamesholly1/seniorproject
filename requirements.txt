@@ -8,4 +8,5 @@ newsapi-python>=0.2.6
 streamlit-sortables>=0.2.0
 requests>=2.25.0
 argon2-cffi>=23.1.0
-
+anthropic>=0.40.0
+python-dotenv>=1.0.0
