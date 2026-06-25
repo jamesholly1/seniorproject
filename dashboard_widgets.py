@@ -13,6 +13,7 @@ import pandas as pd
 from datetime import datetime
 from finance_data_improved import get_stock_info, get_historical_data, get_multiple_stock_info
 from news_api import get_news_factory
+from ui_helpers import status_badge_html, empty_state_html, PRIMARY
 
 
 class DashboardWidget(ABC):
@@ -65,14 +66,17 @@ class PortfolioSummaryWidget(DashboardWidget):
         """Render portfolio summary widget."""
         if not self.is_visible:
             return
-            
+
         with st.container():
-            st.subheader(f"📊 {self.title}")
-            
+            st.subheader(self.title)
+
             if not self.user_portfolio:
-                st.info("Your portfolio is empty. Add some stocks to see summary!")
+                st.html(empty_state_html(
+                    "📊", "Your portfolio is empty",
+                    "Add stocks from the Portfolio tab to see your summary here."
+                ))
                 return
-            
+
             # Create columns for portfolio metrics
             col1, col2, col3 = st.columns(3)
             
@@ -228,8 +232,9 @@ class StockChartWidget(DashboardWidget):
         
         fig.update_layout(
             title=f"{self.ticker} - {self.period.upper()} Price Chart (Candlestick)",
-            template="plotly_dark",
+            template="plotly_white",
             height=500,
+            font_family="DM Sans, sans-serif",
             xaxis_title="Date",
             yaxis_title="Price ($)",
             showlegend=True,
@@ -257,7 +262,7 @@ class StockChartWidget(DashboardWidget):
             x=chart_data['Date'],
             y=chart_data['Close'],
             name='Close Price',
-            line=dict(color='#1f77b4', width=2),
+            line=dict(color=PRIMARY, width=2),
             hovertemplate='<b>%{x}</b><br>Close: $%{y:.2f}<extra></extra>'
         ))
         
@@ -316,8 +321,9 @@ class StockChartWidget(DashboardWidget):
         
         fig.update_layout(
             title=f"{self.ticker} - {self.period.upper()} Price Chart (Line)",
-            template="plotly_dark",
+            template="plotly_white",
             height=500,
+            font_family="DM Sans, sans-serif",
             xaxis_title="Date",
             yaxis_title="Price ($)",
             showlegend=True,
@@ -415,42 +421,40 @@ class NotificationWidget(DashboardWidget):
             return
             
         with st.container():
-            st.subheader("🔔 Price Notifications")
-            
             # Import database functions here to avoid circular imports
             from database import (
                 add_notification_threshold, get_user_notification_thresholds,
                 delete_notification_threshold, update_notification_threshold_status,
                 validate_threshold_input, reset_threshold_trigger
             )
-            
+
             # Add new notification threshold section
             with st.expander("➕ Add New Price Alert", expanded=False):
                 col1, col2, col3 = st.columns([2, 2, 1])
-                
+
                 with col1:
                     ticker_input = st.text_input(
-                        "Stock Symbol", 
+                        "Stock Symbol",
                         placeholder="e.g., AAPL",
                         key=f"{self.widget_id}_ticker"
                     )
-                
+
                 with col2:
                     threshold_price = st.number_input(
-                        "Alert Price ($)", 
+                        "Alert Price ($)",
                         min_value=0.01,
                         step=0.01,
                         key=f"{self.widget_id}_price"
                     )
-                
+
                 with col3:
                     threshold_type = st.selectbox(
                         "Alert When",
                         options=["above", "below"],
                         key=f"{self.widget_id}_type"
                     )
-                
-                if st.button("Add Alert", key=f"{self.widget_id}_add"):
+
+                if st.button("Add Alert", key=f"{self.widget_id}_add", type="primary"):
                     # Validate input
                     is_valid, error_msg = validate_threshold_input(
                         ticker_input, threshold_type, str(threshold_price)
@@ -469,67 +473,65 @@ class NotificationWidget(DashboardWidget):
                         st.error(error_msg)
             
             # Display existing thresholds
-            st.subheader("📋 Your Price Alerts")
-            
+            st.subheader("Your Price Alerts")
+
             thresholds = get_user_notification_thresholds(self.user_id)
-            
+
             if thresholds:
                 for threshold in thresholds:
-                    with st.container():
+                    with st.container(border=True):
                         col1, col2, col3, col4, col5 = st.columns([2, 2, 2, 1, 1])
-                        
+
                         with col1:
                             st.write(f"**{threshold['ticker']}**")
-                        
+
                         with col2:
                             direction = "📈" if threshold['threshold_type'] == 'above' else "📉"
                             st.write(f"{direction} {threshold['threshold_type'].title()} ${threshold['threshold_price']:.2f}")
-                        
+
                         with col3:
                             if threshold['is_triggered']:
-                                st.write("🔴 **Triggered**")
+                                st.html(status_badge_html("triggered"))
                                 if threshold['triggered_at']:
                                     st.caption(f"At: {threshold['triggered_at']}")
                             elif threshold['is_active']:
-                                st.write("🟢 **Active**")
+                                st.html(status_badge_html("active"))
                             else:
-                                st.write("⚪ **Inactive**")
-                        
+                                st.html(status_badge_html("inactive"))
+
                         with col4:
                             # Toggle active/inactive
                             if threshold['is_active']:
-                                if st.button("Pause", key=f"pause_{threshold['id']}"):
+                                if st.button("Pause", key=f"pause_{threshold['id']}", type="secondary"):
                                     update_notification_threshold_status(threshold['id'], False)
                                     st.rerun()
                             else:
-                                if st.button("Resume", key=f"resume_{threshold['id']}"):
+                                if st.button("Resume", key=f"resume_{threshold['id']}", type="secondary"):
                                     update_notification_threshold_status(threshold['id'], True)
                                     st.rerun()
-                        
+
                         with col5:
-                            if st.button("🗑️", key=f"delete_{threshold['id']}", help="Delete alert"):
+                            if st.button("🗑️", key=f"delete_{threshold['id']}", help="Delete alert", type="secondary"):
                                 delete_notification_threshold(threshold['id'])
                                 st.rerun()
-                        
+
                         # Reset trigger button for triggered alerts
                         if threshold['is_triggered']:
-                            if st.button(f"Reset Alert for {threshold['ticker']}", key=f"reset_{threshold['id']}"):
+                            if st.button(f"Reset Alert for {threshold['ticker']}", key=f"reset_{threshold['id']}", type="secondary"):
                                 reset_threshold_trigger(threshold['id'])
                                 st.rerun()
-                        
-                        st.divider()
             else:
-                st.info("No price alerts configured. Add your first alert above!")
-            
+                st.html(empty_state_html("🔔", "No price alerts yet", "Add an alert above to get notified when a stock hits your target price."))
+
             # Show current prices for user's portfolio
             try:
                 from database import get_user_tickers
                 from finance_data_improved import get_stock_info
-                
+
                 user_tickers = get_user_tickers(self.user_id)
                 if user_tickers:
-                    st.subheader("📊 Current Portfolio Prices")
-                    
+                    st.subheader("Current Portfolio Prices")
+
                     for ticker in user_tickers:
                         try:
                             stock_info = get_stock_info(ticker)

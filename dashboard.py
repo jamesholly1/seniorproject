@@ -1,7 +1,7 @@
 """
 Dashboard Module
 
-This module implements the main dashboard functionality for the Investor Center application.
+This module implements the main dashboard functionality for the JRG Trading application.
 It provides a customizable dashboard with widgets that users can configure and arrange.
 """
 
@@ -13,6 +13,7 @@ from database import (
     get_user_widget_configs, save_user_widget_config, delete_user_widget_config,
     update_widget_visibility, create_default_dashboard_widgets, get_user_tickers
 )
+from ui_helpers import section_header_html, PRIMARY, PRIMARY_GLOW, BORDER, WHITE
 
 
 class DashboardManager:
@@ -81,87 +82,61 @@ class DashboardManager:
     
     def _add_custom_css(self) -> None:
         """Add custom CSS for the widget store and dashboard styling."""
-        st.markdown("""
+        st.markdown(f"""
         <style>
-        .widget-store {
-            background-color: #f0f2f6;
-            border-radius: 10px;
+        .widget-store {{
+            background-color: {WHITE};
+            border: 1px solid {BORDER};
+            border-radius: 12px;
             padding: 15px;
             margin-bottom: 10px;
-        }
-        
-        .widget-card {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            border-radius: 8px;
-            padding: 15px;
-            margin: 8px 0;
-            color: white;
-            cursor: pointer;
-            transition: transform 0.2s, box-shadow 0.2s;
-            border: none;
-            width: 100%;
-        }
-        
-        .widget-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-        }
-        
-        .widget-card-portfolio {
-            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-        }
-        
-        .widget-card-chart {
-            background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
-        }
-        
-        .widget-card-news {
-            background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
-        }
-        
-        .widget-card-title {
-            font-size: 16px;
-            font-weight: bold;
-            margin-bottom: 5px;
-        }
-        
-        .widget-card-desc {
-            font-size: 12px;
-            opacity: 0.9;
-        }
-        
-        .grid-selector {
+        }}
+
+        div[data-testid="stButton"] > button[help^="Click to add"] {{
+            background: {WHITE} !important;
+            color: {PRIMARY} !important;
+            border: 1px solid {BORDER} !important;
+            text-align: left !important;
+            white-space: pre-wrap !important;
+        }}
+
+        div[data-testid="stButton"] > button[help^="Click to add"]:hover {{
+            border-color: {PRIMARY} !important;
+            background: {PRIMARY_GLOW} !important;
+        }}
+
+        .grid-selector {{
             display: grid;
             grid-template-columns: repeat(4, 1fr);
             gap: 5px;
             margin: 10px 0;
-        }
-        
-        .grid-cell {
+        }}
+
+        .grid-cell {{
             aspect-ratio: 1;
-            border: 2px dashed #ccc;
+            border: 2px dashed {BORDER};
             border-radius: 4px;
             display: flex;
             align-items: center;
             justify-content: center;
             cursor: pointer;
             transition: all 0.2s;
-        }
-        
-        .grid-cell:hover {
-            border-color: #667eea;
-            background-color: rgba(102, 126, 234, 0.1);
-        }
-        
-        .grid-cell.occupied {
-            border-color: #28a745;
-            background-color: rgba(40, 167, 69, 0.1);
-        }
-        
-        .grid-cell.selected {
-            border-color: #667eea;
-            background-color: rgba(102, 126, 234, 0.2);
-        }
+        }}
+
+        .grid-cell:hover {{
+            border-color: {PRIMARY};
+            background-color: {PRIMARY_GLOW};
+        }}
+
+        .grid-cell.occupied {{
+            border-color: #10B981;
+            background-color: rgba(16, 185, 129, 0.1);
+        }}
+
+        .grid-cell.selected {{
+            border-color: {PRIMARY};
+            background-color: {PRIMARY_GLOW};
+        }}
         </style>
         """, unsafe_allow_html=True)
     
@@ -356,16 +331,14 @@ class DashboardManager:
             # Dashboard header
             header_col1, header_col2 = st.columns([3, 1])
             with header_col1:
-                st.title(f"{self.username}'s Dashboard")
+                st.html(section_header_html("Dashboard", "Your Overview", "A quick snapshot of your portfolio and widgets."))
             with header_col2:
-                if st.button("Refresh", key="refresh_dashboard"):
+                if st.button("Refresh", key="refresh_dashboard", type="secondary"):
                     self.user_portfolio = get_user_tickers(self.user_id)
                     self.load_user_widgets()
                     # Mark for refresh instead of immediate rerun
                     st.session_state.dashboard_refreshed = True
-            
-            st.markdown("---")
-            
+
             # Organize widgets by position
             widget_grid = self._organize_widgets_by_position()
             
