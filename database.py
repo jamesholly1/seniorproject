@@ -86,6 +86,115 @@ def initialize_database():
             )
         ''')
         
+        # Lessons catalogue
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS lessons (
+                lesson_id    INTEGER PRIMARY KEY,
+                title        TEXT    NOT NULL,
+                subtitle     TEXT,
+                lesson_order INTEGER NOT NULL DEFAULT 0,
+                created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # Per-user lesson progress
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_lesson_progress (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id      INTEGER NOT NULL,
+                lesson_id    INTEGER NOT NULL,
+                status       TEXT    NOT NULL DEFAULT 'not_started'
+                                 CHECK (status IN ('not_started', 'in_progress', 'completed')),
+                started_at   TIMESTAMP,
+                completed_at TIMESTAMP,
+                FOREIGN KEY (user_id)   REFERENCES users   (user_id)   ON DELETE CASCADE,
+                FOREIGN KEY (lesson_id) REFERENCES lessons (lesson_id) ON DELETE CASCADE,
+                UNIQUE (user_id, lesson_id)
+            )
+        ''')
+
+        # Practice portfolio holdings
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS portfolio_holdings (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER NOT NULL,
+                ticker     TEXT    NOT NULL,
+                shares     REAL    NOT NULL CHECK (shares > 0),
+                avg_cost   REAL    NOT NULL CHECK (avg_cost > 0),
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE,
+                UNIQUE (user_id, ticker)
+            )
+        ''')
+
+        # Practice portfolio transaction history
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS transactions (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id          INTEGER NOT NULL,
+                ticker           TEXT    NOT NULL,
+                transaction_type TEXT    NOT NULL CHECK (transaction_type IN ('BUY', 'SELL')),
+                shares           REAL    NOT NULL CHECK (shares > 0),
+                price            REAL    NOT NULL CHECK (price > 0),
+                total_value      REAL    NOT NULL,
+                executed_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
+            )
+        ''')
+
+        # AI tutor conversation threads
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS ai_conversations (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER NOT NULL,
+                title      TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
+            )
+        ''')
+
+        # AI tutor messages
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS ai_messages (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id INTEGER NOT NULL,
+                role            TEXT    NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+                content         TEXT    NOT NULL,
+                created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (conversation_id) REFERENCES ai_conversations (id) ON DELETE CASCADE
+            )
+        ''')
+
+        # Backtest run history from the Learn tab
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS backtest_logs (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id       INTEGER NOT NULL,
+                lesson_id     INTEGER,
+                ticker        TEXT    NOT NULL,
+                strategy_name TEXT    NOT NULL,
+                period        TEXT    NOT NULL,
+                total_return  REAL,
+                cagr          REAL,
+                max_drawdown  REAL,
+                sharpe        REAL,
+                n_trades      INTEGER,
+                ran_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
+            )
+        ''')
+
+        # Indexes on common lookups
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_lesson_progress_user   ON user_lesson_progress (user_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_lesson_progress_lesson ON user_lesson_progress (lesson_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_portfolio_holdings_user     ON portfolio_holdings   (user_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_transactions_user           ON transactions         (user_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_transactions_ticker         ON transactions         (ticker)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_ai_conversations_user       ON ai_conversations     (user_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_ai_messages_conversation    ON ai_messages          (conversation_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_backtest_logs_user          ON backtest_logs        (user_id)')
+
         conn.commit()
 
 
@@ -609,6 +718,115 @@ def validate_threshold_input(ticker: str, threshold_type: str, threshold_price: 
         return False, "Threshold price must be a valid number"
     
     return True, ""
+
+
+# Lesson progress helpers
+
+def get_lesson_progress(user_id):
+    """
+    Return a dict mapping lesson_id to status for the given user.
+    Missing entries mean 'not_started'.
+    """
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT lesson_id, status FROM user_lesson_progress WHERE user_id = ?",
+                (user_id,)
+            )
+            return {row["lesson_id"]: row["status"] for row in cursor.fetchall()}
+    except sqlite3.Error:
+        return {}
+
+
+def update_lesson_progress(user_id, lesson_id, status):
+    """
+    Upsert lesson progress for a user. status must be 'not_started', 'in_progress', or 'completed'.
+    Returns True if successful.
+    """
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            if status == "in_progress":
+                cursor.execute('''
+                    INSERT INTO user_lesson_progress (user_id, lesson_id, status, started_at)
+                    VALUES (?, ?, 'in_progress', CURRENT_TIMESTAMP)
+                    ON CONFLICT (user_id, lesson_id) DO UPDATE
+                    SET status = CASE WHEN status = 'completed' THEN 'completed' ELSE 'in_progress' END,
+                        started_at = COALESCE(started_at, CURRENT_TIMESTAMP)
+                ''', (user_id, lesson_id))
+            elif status == "completed":
+                cursor.execute('''
+                    INSERT INTO user_lesson_progress (user_id, lesson_id, status, started_at, completed_at)
+                    VALUES (?, ?, 'completed', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    ON CONFLICT (user_id, lesson_id) DO UPDATE
+                    SET status = 'completed',
+                        completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP)
+                ''', (user_id, lesson_id))
+            conn.commit()
+            return True
+    except sqlite3.Error:
+        return False
+
+
+# Backtest log helpers
+
+def save_backtest_log(user_id, lesson_id, ticker, strategy_name, period,
+                      total_return, cagr, max_drawdown, sharpe, n_trades):
+    """
+    Save a backtest result to the log. Returns True if successful.
+    """
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO backtest_logs
+                    (user_id, lesson_id, ticker, strategy_name, period,
+                     total_return, cagr, max_drawdown, sharpe, n_trades)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (user_id, lesson_id, ticker.upper(), strategy_name, period,
+                  total_return, cagr, max_drawdown, sharpe, n_trades))
+            conn.commit()
+            return True
+    except sqlite3.Error:
+        return False
+
+
+def get_user_backtest_logs(user_id):
+    """
+    Return all backtest log rows for a user, newest first.
+    """
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT id, lesson_id, ticker, strategy_name, period,
+                       total_return, cagr, max_drawdown, sharpe, n_trades, ran_at
+                FROM backtest_logs
+                WHERE user_id = ?
+                ORDER BY ran_at DESC
+            ''', (user_id,))
+            return [dict(row) for row in cursor.fetchall()]
+    except sqlite3.Error:
+        return []
+
+
+def delete_backtest_log(log_id, user_id):
+    """
+    Delete a single backtest log entry. Requires user_id to prevent cross-user deletion.
+    Returns True if a row was deleted.
+    """
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM backtest_logs WHERE id = ? AND user_id = ?",
+                (log_id, user_id)
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+    except sqlite3.Error:
+        return False
 
 
 # Initialize database when module is imported

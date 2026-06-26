@@ -3,6 +3,10 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from finance_data_improved import get_historical_data
+from database import (
+    get_lesson_progress, update_lesson_progress,
+    save_backtest_log, get_user_backtest_logs,
+)
 
 # Lesson registry — each entry is a dict: {id, title, subtitle, render}
 # To add a lesson: append to this list and write a render function below.
@@ -19,9 +23,9 @@ def _register(lesson_id, title, subtitle):
     return decorator
 
 
-def show_learn_tab():
+def show_learn_tab(user_id):
     """
-    Display the lessons tab.
+    Display the lessons tab. user_id is the logged-in user's database id.
     """
     st.header("Quantitative Trading — Strategy Lessons")
     st.markdown(
@@ -33,16 +37,21 @@ def show_learn_tab():
         st.warning("No lessons available yet.")
         return
 
-    # Initialise session state
+    # Store user_id in session state so backtest runners can access it
+    st.session_state.learn_user_id = user_id
+
+    # Load progress from DB and sync into session state
+    db_progress = get_lesson_progress(user_id)
+    completed_ids = {lid for lid, status in db_progress.items() if status == "completed"}
+    started_ids = {lid for lid, status in db_progress.items() if status in ("in_progress", "completed")}
+
     if "learn_lesson" not in st.session_state:
         st.session_state.learn_lesson = None
-    if "completed_lessons" not in st.session_state:
-        st.session_state.completed_lessons = set()
 
     # Progress bar
     total = len(LESSONS)
-    done = len(st.session_state.completed_lessons)
-    st.progress(done / total, text=f"{done} of {total} lessons completed")
+    done = len(completed_ids)
+    st.progress(done / total if total else 0, text=f"{done} of {total} lessons completed")
     st.markdown("---")
 
     # Show lesson index when no lesson is selected
@@ -50,14 +59,15 @@ def show_learn_tab():
         st.subheader("Choose a lesson")
         cols = st.columns(3)
         for i, lesson in enumerate(LESSONS):
-            completed = lesson["id"] in st.session_state.completed_lessons
+            completed = lesson["id"] in completed_ids
+            started = lesson["id"] in started_ids
             with cols[i % 3]:
                 with st.container(border=True):
                     label = f"**Lesson {lesson['id']}**" + (" ✅" if completed else "")
                     st.markdown(label)
                     st.markdown(f"#### {lesson['title']}")
                     st.caption(lesson["subtitle"])
-                    btn_label = "Review" if completed else "Start"
+                    btn_label = "Review" if started else "Start"
                     if st.button(btn_label, key=f"start_{lesson['id']}"):
                         st.session_state.learn_lesson = lesson["id"]
                         st.rerun()
@@ -69,8 +79,8 @@ def show_learn_tab():
         st.session_state.learn_lesson = None
         st.rerun()
 
-    # Mark this lesson complete as soon as the user opens it
-    st.session_state.completed_lessons.add(lesson["id"])
+    # Mark in_progress in DB when the user opens the lesson
+    update_lesson_progress(user_id, lesson["id"], "in_progress")
 
     if st.button("← Back to lessons"):
         st.session_state.learn_lesson = None
@@ -877,10 +887,9 @@ def rsi_strategy(data, period=5, oversold=30, overbought=70):
 """)
 
     st.info("""
-You have now completed the five core strategy lessons. Each one builds on the last:
-Buy & Hold sets the baseline → MA/EMA crossovers follow trends with a lag →
-Momentum measures trend velocity directly → RSI detects when momentum has exhausted itself.
-Real quantitative strategies often combine several of these signals together.
+**Coming next — Lesson 6:** *Bollinger Bands* — builds directly on standard deviation,
+which you just used to compute RSI. Instead of normalising to 0–100, Bollinger Bands
+draw dynamic price envelopes around a moving average and trade when price breaks out of them.
 """)
 
 
@@ -899,6 +908,653 @@ def _rsi_signals(prices, period, oversold, overbought):
     signals[rsi < oversold] = "BUY"
     signals[rsi > overbought] = "SELL"
     return signals
+
+
+# Lesson 6 — Bollinger Bands
+
+@_register(
+    lesson_id=6,
+    title="Bollinger Bands",
+    subtitle="Draw dynamic price envelopes using standard deviation and trade the breakouts.",
+)
+def lesson_6_bollinger_bands():
+    """
+    Render Lesson 6: Bollinger Bands.
+    """
+    st.title("Lesson 6 — Bollinger Bands")
+    st.caption("Complexity: ★★★☆☆  |  Prerequisites: Lesson 5 — RSI")
+    st.markdown("---")
+
+    # Section 1: The Concept
+    st.header("1. The Concept")
+    st.markdown("""
+In Lesson 5 you learned that RSI uses standard deviation internally to measure whether
+recent gains are unusually large compared to recent losses. Bollinger Bands use standard
+deviation more directly: they draw two lines around a moving average, one above and one
+below, at a fixed number of standard deviations away.
+
+These two lines form an **envelope**. Most of the time — about 95% of the time with
+the default settings — the price stays inside the envelope. When it breaks out, something
+unusual is happening.
+
+> When price falls **below the lower band** — it has moved unusually far down. Mean
+> reversion says it should snap back — **BUY**.
+>
+> When price rises **above the upper band** — it has moved unusually far up. Expect a
+> pullback — **SELL**.
+
+Bollinger Bands combine a trend signal (the middle SMA) with a volatility signal
+(the band width). When the bands are narrow, the market is quiet. When they widen
+suddenly, volatility has spiked — big moves follow.
+""")
+
+    # Section 2: The Math
+    st.header("2. Why It Works — The Math")
+    st.markdown(r"""
+**Step 1 — Compute the middle band (simple moving average):**
+
+$$\text{SMA}_n(t) = \frac{1}{n} \sum_{i=0}^{n-1} P_{t-i}$$
+
+**Step 2 — Compute rolling standard deviation over the same window:**
+
+$$\sigma_n(t) = \sqrt{\frac{1}{n} \sum_{i=0}^{n-1} \left(P_{t-i} - \text{SMA}_n(t)\right)^2}$$
+
+**Step 3 — Build the upper and lower bands:**
+
+$$\text{Upper}_t = \text{SMA}_n(t) + k \cdot \sigma_n(t)$$
+
+$$\text{Lower}_t = \text{SMA}_n(t) - k \cdot \sigma_n(t)$$
+
+**Step 4 — Generate the signal:**
+
+$$\text{Signal}(t) = \begin{cases} \text{BUY} & \text{if } P_t < \text{Lower}_t \\ \text{SELL} & \text{if } P_t > \text{Upper}_t \\ \text{HOLD} & \text{otherwise} \end{cases}$$
+
+| Symbol | Meaning |
+|--------|---------|
+| $\text{SMA}_n(t)$ | Simple moving average over the last $n$ days |
+| $\sigma_n(t)$ | Rolling standard deviation — measures how spread out prices have been |
+| $k$ | Band width multiplier (default 2; the strategy here uses 1) |
+| $\text{Upper}_t$, $\text{Lower}_t$ | The dynamic price envelope at day $t$ |
+| $P_t$ | Today's closing price |
+
+**Plain English:** Standard deviation is a measure of spread. If prices over the last
+$n$ days were all very close together, $\sigma$ is small and the bands are tight.
+If prices have been swinging wildly, $\sigma$ is large and the bands are wide.
+
+Setting $k = 2$ means the bands capture roughly 95% of prices under a normal distribution.
+Setting $k = 1$ (as in this lesson's strategy) captures about 68%, so the price breaks
+out more frequently — more signals, more trades.
+
+The key insight: **the bands adapt to the market**. In a volatile period they widen to
+avoid false signals. In a calm period they tighten and become more sensitive.
+This is what RSI cannot do — its thresholds are fixed regardless of volatility.
+""")
+
+    # Section 3: The Code
+    st.header("3. The Code")
+    st.code("""
+def bollinger_bands_strategy(data, window=3, num_std=1):
+    df = data.copy()
+
+    # Middle band: simple moving average of closing price
+    df['SMA'] = df['Close'].rolling(window=window, min_periods=1).mean()
+
+    # Volatility: rolling standard deviation over the same window
+    df['STD'] = df['Close'].rolling(window=window, min_periods=1).std()
+
+    # Upper and lower bands: mean ± (k × std)
+    df['Upper'] = df['SMA'] + num_std * df['STD']
+    df['Lower'] = df['SMA'] - num_std * df['STD']
+
+    # Signal: buy when price breaks below lower band, sell above upper
+    signals = pd.Series("HOLD", index=df.index)
+    signals[df['Close'] < df['Lower']] = "BUY"
+    signals[df['Close'] > df['Upper']] = "SELL"
+
+    return signals
+""", language="python")
+
+    with st.expander("Line-by-line explanation"):
+        st.markdown("""
+| Line | What it does | Why |
+|------|-------------|-----|
+| `.rolling(window).mean()` | Sliding average over `window` days | Forms the middle band — the "fair value" reference |
+| `.rolling(window).std()` | Sliding standard deviation | Measures how wide prices have been swinging recently |
+| `SMA + num_std * STD` | Shifts the mean up by `num_std` standard deviations | Upper band — unusually high prices break above here |
+| `SMA - num_std * STD` | Shifts the mean down by `num_std` standard deviations | Lower band — unusually low prices break below here |
+| `Close < Lower` → BUY | Price is below the lower envelope | Statistically unusual low — mean reversion predicts a bounce |
+| `Close > Upper` → SELL | Price is above the upper envelope | Statistically unusual high — mean reversion predicts a pullback |
+
+**Effect of changing parameters:**
+
+| Parameter | Effect of increasing |
+|-----------|----------------------|
+| `window` | Smoother, slower-moving bands — fewer signals |
+| `num_std` | Wider bands — price breaks out less often — fewer but stronger signals |
+""")
+
+    # Section 4: Live Interactive Backtest
+    st.header("4. Live Interactive Backtest")
+    st.markdown("Widen the bands (`num_std`) to reduce noise, or narrow the window to make them more reactive.")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        ticker = st.text_input("Ticker", value="AAPL", key="l6_ticker").upper().strip()
+    with col2:
+        bb_window = st.slider("Window (days)", 5, 50, 20, key="l6_window")
+    with col3:
+        bb_std = st.slider("Num std deviations", 1, 3, 2, key="l6_std")
+
+    hist_period = st.selectbox("Period", ["1y", "2y", "5y"], index=1, key="l6_hist_period")
+
+    if st.button("Run Backtest", key="l6_run"):
+        _run_signal_backtest(ticker, hist_period, "Bollinger Bands", _bb_signals, bb_window, bb_std)
+
+    if "l6_ran" not in st.session_state:
+        st.session_state.l6_ran = True
+        _run_signal_backtest("AAPL", "2y", "Bollinger Bands", _bb_signals, 20, 2)
+
+    # Section 5: Key Takeaways
+    st.header("5. Key Takeaways")
+    st.success("""
+**Remember these three things:**
+
+1. **Bollinger Bands are self-adjusting.** Unlike fixed RSI thresholds, the bands widen
+   in volatile markets and narrow in calm ones — the signal adapts to the asset.
+
+2. **Band width is information.** A sudden widening (a "Bollinger squeeze" breaking out)
+   often signals the start of a large move. Many traders use band width alone as a
+   volatility alert, separate from the buy/sell signals.
+
+3. **$k = 1$ vs $k = 2$ changes the strategy's character.** At $k=1$ you get more
+   frequent mean-reversion signals. At $k=2$ you're only acting on extreme outliers.
+   Neither is universally better — it depends on the asset's typical behavior.
+""")
+
+    st.info("""
+**Coming next — Lesson 7:** *Mean Reversion with Z-Score* — formalises the same
+"how far from average?" question using the z-score, a foundational statistical
+concept that appears throughout quantitative finance.
+""")
+
+
+def _bb_signals(prices, window, num_std):
+    """
+    Compute Bollinger Bands signals for a price series.
+    """
+    sma = prices.rolling(window=window, min_periods=1).mean()
+    std = prices.rolling(window=window, min_periods=1).std()
+    upper = sma + num_std * std
+    lower = sma - num_std * std
+    signals = pd.Series("HOLD", index=prices.index)
+    signals[prices < lower] = "BUY"
+    signals[prices > upper] = "SELL"
+    return signals
+
+
+# Lesson 7 — Mean Reversion (Z-Score)
+
+@_register(
+    lesson_id=7,
+    title="Mean Reversion",
+    subtitle="Measure how far price has strayed from its average in units of standard deviation — the z-score.",
+)
+def lesson_7_mean_reversion():
+    """
+    Render Lesson 7: Mean Reversion with Z-Score.
+    """
+    st.title("Lesson 7 — Mean Reversion")
+    st.caption("Complexity: ★★★★☆  |  Prerequisites: Lesson 6 — Bollinger Bands")
+    st.markdown("---")
+
+    # Section 1: The Concept
+    st.header("1. The Concept")
+    st.markdown("""
+Lesson 6 used standard deviation to build bands around a moving average. The mean reversion
+strategy formalises that idea with a single number called the **z-score** — a universal way
+to answer the question: *how unusual is today's price compared to recent history?*
+
+A z-score of 0 means price is exactly at its recent average.
+A z-score of +2 means price is 2 standard deviations above average — unusually high.
+A z-score of -2 means price is 2 standard deviations below average — unusually low.
+
+The strategy is pure mean reversion:
+> If price has fallen far enough below average (z-score below a negative threshold) — **BUY**.
+> The bet is that it will drift back toward the mean.
+>
+> If price has risen far enough above average (z-score above a positive threshold) — **SELL**.
+> The bet is that it will cool off back toward the mean.
+
+Mean reversion is the opposite philosophy to momentum. Momentum says "trends persist."
+Mean reversion says "extremes correct." Both are true — in different markets, at different
+time scales. Knowing both lets you pick the right tool.
+""")
+
+    # Section 2: The Math
+    st.header("2. Why It Works — The Math")
+    st.markdown(r"""
+**The z-score** measures distance from the mean in units of standard deviation:
+
+$$Z_t = \frac{P_t - \mu_n(t)}{\sigma_n(t)}$$
+
+where the rolling mean and standard deviation are computed over a window of $n$ days:
+
+$$\mu_n(t) = \frac{1}{n} \sum_{i=0}^{n-1} P_{t-i}$$
+
+$$\sigma_n(t) = \sqrt{\frac{1}{n} \sum_{i=0}^{n-1} \left(P_{t-i} - \mu_n(t)\right)^2}$$
+
+The signal uses a symmetric threshold $z^*$:
+
+$$\text{Signal}(t) = \begin{cases} \text{BUY}  & \text{if } Z_t < z^* \quad \text{(price far below mean)} \\ \text{SELL} & \text{if } Z_t > -z^* \quad \text{(price far above mean)} \\ \text{HOLD} & \text{otherwise} \end{cases}$$
+
+where $z^* < 0$ (e.g. $-1.0$), so $-z^* > 0$ (e.g. $+1.0$).
+
+| Symbol | Meaning |
+|--------|---------|
+| $Z_t$ | Z-score at day $t$ — how many standard deviations from the mean |
+| $P_t$ | Today's closing price |
+| $\mu_n(t)$ | Rolling mean of price over the last $n$ days |
+| $\sigma_n(t)$ | Rolling standard deviation over the last $n$ days |
+| $z^*$ | Entry threshold (negative number, e.g. $-1.0$) |
+| $-z^*$ | Exit/sell threshold (positive mirror of $z^*$) |
+
+**Plain English — building intuition for z-scores:**
+
+Imagine a stock's closing price over the last 20 days had an average of $150 and a
+standard deviation of $5. Today's price is $140.
+
+$$Z = \frac{140 - 150}{5} = -2.0$$
+
+The price is 2 standard deviations below its recent average. Under a normal distribution
+this happens only about 2.3% of the time. The strategy says: this is unusually cheap —
+buy it and wait for it to return toward $150.
+
+**Why does mean reversion work?** Prices are pulled toward fundamental value.
+When sentiment drives a stock too far down, value investors step in and buy it back up.
+When euphoria pushes it too far up, profit-takers sell it back down. The z-score
+quantifies exactly how far "too far" is in a statistically consistent way.
+""")
+
+    # Section 3: The Code
+    st.header("3. The Code")
+    st.code("""
+def mean_reversion_strategy(data, window=20, entry_z=-1.0, exit_z=0.0):
+    df = data.copy()
+
+    # Rolling mean — the "fair value" anchor
+    df['Mean'] = df['Close'].rolling(window=window, min_periods=1).mean()
+
+    # Rolling standard deviation — replace zeros with NaN to avoid division by zero
+    df['Std'] = df['Close'].rolling(window=window, min_periods=1).std().replace(0, np.nan)
+
+    # Z-score: how many standard deviations is today's price from the rolling mean?
+    df['Zscore'] = (df['Close'] - df['Mean']) / df['Std']
+
+    # Buy when price is unusually far below the mean; sell when it returns above
+    signals = pd.Series("HOLD", index=df.index)
+    signals[df['Zscore'] < entry_z]   = "BUY"
+    signals[df['Zscore'] > -entry_z]  = "SELL"
+
+    return signals
+""", language="python")
+
+    with st.expander("Line-by-line explanation"):
+        st.markdown("""
+| Line | What it does | Why |
+|------|-------------|-----|
+| `.rolling(window).mean()` | Sliding average of the last `window` closing prices | This is the mean the price "should" return to |
+| `.std().replace(0, np.nan)` | Sliding standard deviation, zeros replaced with NaN | Division by zero would produce infinite z-scores during flat periods; NaN propagates safely |
+| `(Close - Mean) / Std` | The z-score formula | Normalises the distance from the mean into a unit-free number |
+| `Zscore < entry_z` → BUY | Z-score is more negative than the threshold (e.g. below -1.0) | Price is at least 1 standard deviation below its mean — unusually cheap |
+| `Zscore > -entry_z` → SELL | Z-score is more positive than the mirror threshold (e.g. above +1.0) | Price has recovered above +1 std — mean reversion trade is complete |
+
+**Connecting to Bollinger Bands (Lesson 6):**
+
+Bollinger Bands and z-score mean reversion are mathematically equivalent — a price
+touching the lower Bollinger Band ($k=1$) is the same as having a z-score of $-1.0$.
+The difference is presentation: Bollinger Bands plot the envelope on the price chart;
+z-score normalises everything to a single oscillator around zero, making it easier to
+compare thresholds across different stocks.
+""")
+
+    # Section 4: Live Interactive Backtest
+    st.header("4. Live Interactive Backtest")
+    st.markdown("Try a longer window for a smoother mean, or a more negative entry threshold for fewer but stronger signals.")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        ticker = st.text_input("Ticker", value="AAPL", key="l7_ticker").upper().strip()
+    with col2:
+        mr_window = st.slider("Rolling window (days)", 5, 60, 20, key="l7_window")
+    with col3:
+        entry_z = st.slider("Entry z-score threshold", -3.0, -0.5, -1.0, step=0.25, key="l7_entry_z")
+
+    hist_period = st.selectbox("Period", ["1y", "2y", "5y"], index=1, key="l7_hist_period")
+
+    if st.button("Run Backtest", key="l7_run"):
+        _run_signal_backtest(ticker, hist_period, "Mean Reversion", _mr_signals, mr_window, entry_z)
+
+    if "l7_ran" not in st.session_state:
+        st.session_state.l7_ran = True
+        _run_signal_backtest("AAPL", "2y", "Mean Reversion", _mr_signals, 20, -1.0)
+
+    # Section 5: Key Takeaways
+    st.header("5. Key Takeaways")
+    st.success("""
+**Remember these three things:**
+
+1. **The z-score is universal.** It appears in statistics, machine learning, risk management,
+   and options pricing. Understanding it here gives you a tool that works far beyond trading.
+
+2. **Mean reversion needs a range-bound market.** In a strong trend the mean keeps moving
+   in one direction. "Unusually cheap" can get much cheaper. Always know whether the
+   asset is trending or ranging before applying this strategy.
+
+3. **Window length controls what "normal" means.** A 5-day window defines normal as the
+   last week. A 200-day window defines normal as the last year. The right window
+   depends on the time horizon of the reversion you expect.
+""")
+
+    st.info("""
+**Coming next — Lesson 8:** *VWAP* — introduces **volume** as a factor for the first
+time. Every strategy so far has used price alone. VWAP asks: at what price did the
+*majority of trading activity* happen today? That price is a better anchor than a simple average.
+""")
+
+
+def _mr_signals(prices, window, entry_z):
+    """
+    Compute mean reversion z-score signals for a price series.
+    """
+    mean = prices.rolling(window=window, min_periods=1).mean()
+    std = prices.rolling(window=window, min_periods=1).std().replace(0, float("nan"))
+    zscore = (prices - mean) / std
+    signals = pd.Series("HOLD", index=prices.index)
+    signals[zscore < entry_z] = "BUY"
+    signals[zscore > -entry_z] = "SELL"
+    return signals
+
+
+# Lesson 8 — VWAP
+
+@_register(
+    lesson_id=8,
+    title="VWAP",
+    subtitle="Weight prices by volume to find where real money traded — and use that as your anchor.",
+)
+def lesson_8_vwap():
+    """
+    Render Lesson 8: VWAP Strategy.
+    """
+    st.title("Lesson 8 — VWAP")
+    st.caption("Complexity: ★★★★☆  |  Prerequisites: Lesson 7 — Mean Reversion")
+    st.markdown("---")
+
+    # Section 1: The Concept
+    st.header("1. The Concept")
+    st.markdown("""
+Every strategy so far has used closing price as its only input. But price alone is
+incomplete — it tells you *where* the last trade happened, not *how much money* was
+involved. A stock could close at $200 on a day where almost nobody traded, or on a
+day where billions of dollars changed hands. Those two situations are very different.
+
+**Volume** measures how many shares were traded. Combining price with volume gives
+you a *weighted* view of the market: prices where a lot of trading happened count
+more than prices on quiet moments.
+
+**VWAP (Volume Weighted Average Price)** is the answer to: "If I had to pick one
+price that best represents where money actually traded today, what would it be?"
+
+> When the current price is **below VWAP** — the stock is trading below where most
+> money changed hands. Institutions often see this as a buying opportunity — **BUY**.
+>
+> When the current price is **above VWAP** — it is trading above the day's fair value.
+> Institutions may sell into this strength — **SELL**.
+
+VWAP is the most widely used benchmark by institutional traders. A fund that
+buys all day "in line with VWAP" is considered to have traded efficiently.
+""")
+
+    # Section 2: The Math
+    st.header("2. Why It Works — The Math")
+    st.markdown(r"""
+**Step 1 — Compute the typical price for each period:**
+
+$$TP_t = \frac{H_t + L_t + C_t}{3}$$
+
+The typical price averages the high, low, and close. It is a better single-number
+summary of a period's price range than the close alone.
+
+**Step 2 — Compute the cumulative VWAP:**
+
+$$\text{VWAP}_t = \frac{\sum_{i=1}^{t} TP_i \cdot V_i}{\sum_{i=1}^{t} V_i}$$
+
+This is a **running weighted average**: you multiply each period's typical price
+by its volume, sum all those up, and divide by total volume to date.
+
+**Step 3 — Generate the signal using a threshold $\theta$:**
+
+$$\text{Signal}(t) = \begin{cases} \text{BUY}  & \text{if } C_t < \text{VWAP}_t \cdot (1 - \theta) \\ \text{SELL} & \text{if } C_t > \text{VWAP}_t \cdot (1 + \theta) \\ \text{HOLD} & \text{otherwise} \end{cases}$$
+
+| Symbol | Meaning |
+|--------|---------|
+| $TP_t$ | Typical price at period $t$ — average of high, low, and close |
+| $H_t, L_t, C_t$ | High, low, and closing price at period $t$ |
+| $V_t$ | Volume (number of shares traded) at period $t$ |
+| $\text{VWAP}_t$ | Volume-weighted average price up to period $t$ |
+| $\theta$ | Threshold — minimum deviation from VWAP to trigger a signal |
+
+**Plain English — why volume matters:**
+
+Imagine two days. On Monday the stock trades at $100 for 1 million shares, then
+drifts up to $110 on just 10,000 shares. A simple average gives $105.
+VWAP weights by volume:
+
+$$\text{VWAP} = \frac{100 \times 1{,}000{,}000 + 110 \times 10{,}000}{1{,}010{,}000} \approx \$100.10$$
+
+The bulk of trading happened at $100, so $100.10 is the "true" average.
+If price is now at $110 with almost no volume supporting it, VWAP tells you
+that is overextended — the move lacks conviction.
+
+**Why is cumulative VWAP used here rather than intraday VWAP?**
+Intraday VWAP resets every morning, which requires tick-level data.
+The cumulative version works on daily OHLCV bars and still captures the
+same core idea: where has the *bulk of activity* occurred across the data set.
+""")
+
+    # Section 3: The Code
+    st.header("3. The Code")
+    st.code("""
+def vwap_strategy(data, threshold=0.001):
+    df = data.copy()
+
+    # Typical price: average of high, low, and close for each day
+    df['Typical'] = (df['High'] + df['Low'] + df['Close']) / 3
+
+    # Cumulative sum of (typical price × volume) and of volume alone
+    df['Cum_TPV'] = (df['Typical'] * df['Volume']).cumsum()
+    df['Cum_Vol'] = df['Volume'].cumsum()
+
+    # VWAP: divide cumulative dollar-volume by cumulative volume
+    df['VWAP'] = df['Cum_TPV'] / df['Cum_Vol']
+
+    # Signal: buy when price is below VWAP by more than the threshold
+    signals = pd.Series("HOLD", index=df.index)
+    signals[df['Close'] > df['VWAP'] * (1 + threshold)] = "SELL"
+    signals[df['Close'] < df['VWAP'] * (1 - threshold)] = "BUY"
+
+    return signals
+""", language="python")
+
+    with st.expander("Line-by-line explanation"):
+        st.markdown("""
+| Line | What it does | Why |
+|------|-------------|-----|
+| `(High + Low + Close) / 3` | Typical price | More representative than close alone — captures the full day's range |
+| `Typical * Volume` | Dollar volume for each day | Weights the price by how much activity occurred at that price |
+| `.cumsum()` | Running total from day 1 to today | VWAP is a cumulative statistic — it incorporates all history in the dataset |
+| `Cum_TPV / Cum_Vol` | Weighted average price | Divides total dollar volume by total shares — gives average price per share weighted by activity |
+| `Close > VWAP * (1 + threshold)` → SELL | Price is above VWAP by more than the threshold | Trading above where most money transacted — potentially overextended |
+| `Close < VWAP * (1 - threshold)` → BUY | Price is below VWAP by more than the threshold | Trading below where most money transacted — potentially undervalued |
+
+**This is the first strategy to use High, Low, and Volume columns.**
+All previous strategies only needed Close. VWAP is richer because it incorporates
+the full picture of each day's trading activity.
+""")
+
+    # Section 4: Live Interactive Backtest
+    st.header("4. Live Interactive Backtest")
+    st.markdown("Adjust the threshold — a larger value requires the price to deviate more from VWAP before signalling.")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        ticker = st.text_input("Ticker", value="AAPL", key="l8_ticker").upper().strip()
+    with col2:
+        vwap_threshold = st.slider("Threshold (%)", 0.0, 3.0, 0.1, step=0.1, key="l8_threshold") / 100
+
+    hist_period = st.selectbox("Period", ["1y", "2y", "5y"], index=1, key="l8_hist_period")
+
+    if st.button("Run Backtest", key="l8_run"):
+        _run_vwap_backtest(ticker, hist_period, vwap_threshold)
+
+    if "l8_ran" not in st.session_state:
+        st.session_state.l8_ran = True
+        _run_vwap_backtest("AAPL", "2y", 0.001)
+
+    # Section 5: Key Takeaways
+    st.header("5. Key Takeaways")
+    st.success("""
+**Remember these three things:**
+
+1. **Volume is conviction.** A price move on high volume means many participants
+   agreed on that price. A price move on low volume might not hold — it lacks confirmation.
+   VWAP is your first tool for incorporating that information.
+
+2. **VWAP is the institutional benchmark.** When a large fund needs to buy a million
+   shares, it spreads orders throughout the day and aims to beat VWAP — paying less
+   than the volume-weighted average. This makes VWAP a self-fulfilling support and
+   resistance level because large players are actively trading around it.
+
+3. **Cumulative VWAP drifts over long periods.** Because it uses all history,
+   a very old VWAP from months ago has a lot of weight. In practice, VWAP is most
+   powerful on intraday charts where it resets each morning. On daily data it still
+   provides useful context but should be combined with other signals.
+""")
+
+    st.info("""
+You have now covered eight strategies — from zero-complexity buy and hold to volume-weighted
+institutional benchmarking. The progression: baseline → trend-following → momentum →
+mean-reversion → volatility-adjusted → volume-weighted. Each layer added one new concept.
+Real quant systems combine multiple signals. You now have the vocabulary to understand how.
+""")
+
+
+def _vwap_signals_from_df(df, threshold):
+    """
+    Compute VWAP signals from a full OHLCV DataFrame.
+    """
+    typical = (df["High"] + df["Low"] + df["Close"]) / 3
+    cum_tpv = (typical * df["Volume"]).cumsum()
+    cum_vol = df["Volume"].cumsum()
+    vwap = cum_tpv / cum_vol
+    signals = pd.Series("HOLD", index=df.index)
+    signals[df["Close"] > vwap * (1 + threshold)] = "SELL"
+    signals[df["Close"] < vwap * (1 - threshold)] = "BUY"
+    return signals
+
+
+def _run_vwap_backtest(ticker, period, threshold):
+    """
+    VWAP-specific backtest runner — needs the full OHLCV DataFrame, not just prices.
+    """
+    with st.spinner(f"Loading {ticker} data..."):
+        df = get_historical_data(ticker, period=period)
+
+    if df.empty:
+        st.error(f"No data returned for {ticker}. Try a different ticker.")
+        return
+
+    prices = df["Close"].dropna()
+    signals = _vwap_signals_from_df(df, threshold)
+
+    raw_pos = signals.map({"BUY": 1.0, "SELL": 0.0, "HOLD": float("nan")})
+    position = raw_pos.ffill().fillna(0.0)
+
+    market_returns = prices.pct_change()
+    strategy_returns = position.shift(1) * market_returns
+
+    strategy_equity = (1 + strategy_returns).cumprod()
+    bh_equity = prices / prices.iloc[0]
+
+    years = len(prices) / 252
+    strat_total = float(strategy_equity.iloc[-1])
+    strat_cagr = strat_total ** (1 / years) - 1
+
+    roll_peak = strategy_equity.cummax()
+    drawdown = (strategy_equity - roll_peak) / roll_peak
+    max_dd = float(drawdown.min())
+
+    clean = strategy_returns.dropna()
+    sharpe = float((clean.mean() / clean.std()) * np.sqrt(252)) if clean.std() > 0 else 0.0
+
+    n_trades = int((signals != signals.shift()).sum())
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total Return", f"{(strat_total - 1) * 100:.1f}%")
+    m2.metric("CAGR", f"{strat_cagr * 100:.1f}%")
+    m3.metric("Max Drawdown", f"{max_dd * 100:.1f}%")
+    m4.metric("Sharpe Ratio", f"{sharpe:.2f}")
+    st.caption(f"Signal changes (trades): {n_trades}")
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=strategy_equity.index, y=strategy_equity.values,
+        name="VWAP", line=dict(color="cyan", width=2),
+    ))
+    fig.add_trace(go.Scatter(
+        x=bh_equity.index, y=bh_equity.values,
+        name="Buy & Hold", line=dict(color="orange", width=2, dash="dot"),
+    ))
+    fig.update_layout(
+        title=f"{ticker} — VWAP vs Buy & Hold (start = $1.00)",
+        template="plotly_dark", height=420,
+        xaxis_title="Date", yaxis_title="Portfolio Value ($)",
+        hovermode="x unified", legend=dict(x=0, y=1),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    fig2 = go.Figure()
+    fig2.add_trace(go.Scatter(
+        x=drawdown.index, y=drawdown.values * 100,
+        name="Drawdown", fill="tozeroy",
+        line=dict(color="red", width=1),
+        fillcolor="rgba(255,50,50,0.25)",
+    ))
+    fig2.update_layout(
+        title=f"{ticker} VWAP — Drawdown from Peak (%)",
+        template="plotly_dark", height=250,
+        xaxis_title="Date", yaxis_title="Drawdown (%)", showlegend=False,
+    )
+    st.plotly_chart(fig2, use_container_width=True)
+
+    bh_total = float(bh_equity.iloc[-1])
+    bh_cagr = bh_total ** (1 / years) - 1
+    beat = strat_cagr > bh_cagr
+    st.markdown(f"""
+**Reading these results for {ticker} over {period}:**
+
+- The strategy returned **{(strat_total-1)*100:.1f}%** vs buy & hold's **{(bh_total-1)*100:.1f}%**.
+- {"The strategy beat buy & hold on CAGR (" + f"{strat_cagr*100:.1f}% vs {bh_cagr*100:.1f}%" + ")." if beat else "Buy & hold won on CAGR (" + f"{bh_cagr*100:.1f}% vs {strat_cagr*100:.1f}%" + "). This is common — active strategies have to clear a high bar."}
+- The strategy made **{n_trades} signal changes**. More trades = more transaction costs in real life.
+""")
+
+    # Persist result and mark lesson completed
+    user_id = st.session_state.get("learn_user_id")
+    lesson_id = st.session_state.get("learn_lesson")
+    if user_id and lesson_id:
+        save_backtest_log(user_id, lesson_id, ticker, "VWAP", period,
+                          strat_total - 1, strat_cagr, max_dd, sharpe, n_trades)
+        update_lesson_progress(user_id, lesson_id, "completed")
 
 
 # Shared signal-based backtest runner
@@ -1007,6 +1663,14 @@ def _run_signal_backtest(ticker, period, strategy_name, signal_fn, *signal_args)
 - {"The strategy beat buy & hold on CAGR (" + f"{strat_cagr*100:.1f}% vs {bh_cagr*100:.1f}%" + ")." if beat else "Buy & hold won on CAGR (" + f"{bh_cagr*100:.1f}% vs {strat_cagr*100:.1f}%" + "). This is common — active strategies have to clear a high bar."}
 - The strategy made **{n_trades} signal changes**. More trades = more transaction costs in real life.
 """)
+
+    # Persist result and mark lesson completed
+    user_id = st.session_state.get("learn_user_id")
+    lesson_id = st.session_state.get("learn_lesson")
+    if user_id and lesson_id:
+        save_backtest_log(user_id, lesson_id, ticker, strategy_name, period,
+                          strat_total - 1, strat_cagr, strat_max_dd, strat_sharpe, n_trades)
+        update_lesson_progress(user_id, lesson_id, "completed")
 
 
 def _run_buy_and_hold_backtest(ticker, period, compare_sp500):
