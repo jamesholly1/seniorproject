@@ -1,5 +1,6 @@
 import sqlite3
 import os
+import secrets
 from contextlib import contextmanager
 from typing import Optional, List, Tuple
 from datetime import datetime, timedelta
@@ -19,6 +20,11 @@ _DUMMY_HASH = _password_hasher.hash("placeholder")
 
 MAX_FAILED_ATTEMPTS = 5
 LOCKOUT_MINUTES = 15
+
+# Server-side sessions: how long a token is valid, and the timestamp format we
+# store expiry in so string comparison and parsing stay consistent.
+SESSION_TTL_HOURS = 24
+_SESSION_TS_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 @contextmanager
@@ -208,12 +214,29 @@ def initialize_database():
             )
         ''')
 
+        # Server-side sessions for the eventual React + back-end split. The
+        # token is an opaque random id; all session state lives in the row so it
+        # can be expired or revoked server-side (Streamlit's in-memory
+        # session_state won't survive that move).
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_token TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP NOT NULL,
+                last_accessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
+            )
+        ''')
+
         # Helpful indexes for the most common lookups.
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_progress_user ON user_lesson_progress (user_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_holdings_user ON portfolio_holdings (user_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions (user_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_conversations_user ON ai_conversations (user_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_messages_conversation ON ai_messages (conversation_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions (expires_at)')
 
         conn.commit()
 
@@ -1152,6 +1175,92 @@ def delete_conversation(conversation_id: int) -> bool:
             return cursor.rowcount > 0
     except sqlite3.Error:
         return False
+
+
+# ---- Server-side sessions --------------------------------------------
+#
+# These back the auth carry-over for the planned React + back-end split.
+# The token is opaque (no data baked in); everything lives in the row, so a
+# session can be expired by time or revoked by deleting it. Expiry is compared
+# in Python against datetime.now() so creation and validation use one clock.
+
+def create_session(user_id: int, ttl_hours: int = SESSION_TTL_HOURS) -> Optional[str]:
+    """Create a session for a user and return an opaque token, or None on error."""
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.now() + timedelta(hours=ttl_hours)
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO sessions (session_token, user_id, expires_at) "
+                "VALUES (?, ?, ?)",
+                (token, user_id, expires_at.strftime(_SESSION_TS_FORMAT)),
+            )
+            conn.commit()
+            return token
+    except sqlite3.Error:
+        return None
+
+
+def get_session(token: str) -> Optional[dict]:
+    """Return the session row (including user_id) if the token exists and has not
+    expired. Expired tokens are deleted and treated as no session."""
+    if not token:
+        return None
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM sessions WHERE session_token = ?", (token,)
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            expires_at = datetime.strptime(row["expires_at"], _SESSION_TS_FORMAT)
+            if expires_at <= datetime.now():
+                cursor.execute(
+                    "DELETE FROM sessions WHERE session_token = ?", (token,)
+                )
+                conn.commit()
+                return None
+            cursor.execute(
+                "UPDATE sessions SET last_accessed_at = CURRENT_TIMESTAMP "
+                "WHERE session_token = ?",
+                (token,),
+            )
+            conn.commit()
+            return dict(row)
+    except (sqlite3.Error, ValueError):
+        return None
+
+
+def delete_session(token: str) -> bool:
+    """Invalidate a single session (logout). True if a row was removed."""
+    if not token:
+        return False
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM sessions WHERE session_token = ?", (token,))
+            conn.commit()
+            return cursor.rowcount > 0
+    except sqlite3.Error:
+        return False
+
+
+def purge_expired_sessions() -> int:
+    """Delete every expired session. Returns the number of rows removed."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM sessions WHERE expires_at <= ?",
+                (datetime.now().strftime(_SESSION_TS_FORMAT),),
+            )
+            conn.commit()
+            return cursor.rowcount
+    except sqlite3.Error:
+        return 0
 
 
 # Initialize database when module is imported

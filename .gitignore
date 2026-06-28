@@ -10,3 +10,5 @@ dist/
 build/
 .env
 portfolio.db
+test_*.db
+*.db-journal

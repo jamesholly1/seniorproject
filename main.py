@@ -1,12 +1,15 @@
 from finance_data_improved import get_stock_info, get_historical_data, get_multiple_stock_info
 from database import (
     initialize_database, create_user, authenticate_user, get_user_by_username,
-    add_user_ticker, remove_user_ticker, get_user_tickers, clear_user_tickers
+    add_user_ticker, remove_user_ticker, get_user_tickers, clear_user_tickers,
+    create_session, get_session, delete_session, purge_expired_sessions
 )
 import pandas as pd
 from news_api import get_news_factory
 from dashboard import show_dashboard_page
 from notifications import auto_check_thresholds_in_session, display_session_notifications
+from learn import show_learn_tab
+from tutor import show_tutor_tab
 import streamlit as st
 import time
 import plotly.graph_objects as go
@@ -26,7 +29,10 @@ def main():
     
     # Initialize database
     initialize_database()
-    
+
+    # Clear out any expired server-side sessions on each load (cheap at this scale).
+    purge_expired_sessions()
+
     # Initialize session state for authentication
     if 'authenticated' not in st.session_state:
         st.session_state.authenticated = False
@@ -34,9 +40,22 @@ def main():
         st.session_state.user_id = None
     if 'username' not in st.session_state:
         st.session_state.username = None
+    if 'session_token' not in st.session_state:
+        st.session_state.session_token = None
     if 'current_page' not in st.session_state:
         st.session_state.current_page = 'landing'
-    
+
+    # Validate the server-side session. If the token is gone (expired or revoked
+    # on the server), drop the user back to the landing page. This is the
+    # server-side check that will carry over to the React + back-end split.
+    if st.session_state.authenticated and st.session_state.session_token:
+        if get_session(st.session_state.session_token) is None:
+            st.session_state.authenticated = False
+            st.session_state.user_id = None
+            st.session_state.username = None
+            st.session_state.session_token = None
+            st.session_state.current_page = 'landing'
+
     # Check authentication status and show appropriate page
     if not st.session_state.authenticated:
         show_landing_page()
@@ -55,10 +74,12 @@ def show_portfolio_page():
         st.title(f"📈 {st.session_state.username}'s Investor Center")
     with col3:
         if st.button("🚪 Logout", type="secondary"):
-            # Clear session state
+            # Invalidate the server-side session, then clear local state.
+            delete_session(st.session_state.get("session_token"))
             st.session_state.authenticated = False
             st.session_state.user_id = None
             st.session_state.username = None
+            st.session_state.session_token = None
             st.session_state.current_page = 'landing'
             st.success("Logged out successfully!")
             st.rerun()
@@ -84,22 +105,28 @@ def show_portfolio_page():
     user_portfolio = get_user_tickers(st.session_state.user_id)
     
     # Create tabs for different sections - Dashboard is now the first tab
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["🏠 Dashboard", "📊 Portfolio", "📈 Charts", "📰 News", "🔔 Notifications"])
-    
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["🏠 Dashboard", "📊 Portfolio", "📈 Charts", "📰 News", "🔔 Notifications", "📚 Learn", "🤖 Tutor"])
+
     with tab1:
         show_dashboard_page()
-    
+
     with tab2:
         show_portfolio_tab(user_portfolio)
-    
+
     with tab3:
         show_charts_tab(user_portfolio)
-    
+
     with tab4:
         show_news_tab(user_portfolio)
-    
+
     with tab5:
         show_notifications_tab()
+
+    with tab6:
+        show_learn_tab()
+
+    with tab7:
+        show_tutor_tab()
 
 
 def show_portfolio_tab(user_portfolio):
@@ -511,6 +538,10 @@ def show_login_form():
                         st.session_state.authenticated = True
                         st.session_state.user_id = user_id
                         st.session_state.username = username
+                        # Issue a server-side session token. In the Streamlit app
+                        # we hold it in session_state; in the React + back-end
+                        # split this is what gets delivered as an httpOnly cookie.
+                        st.session_state.session_token = create_session(user_id)
                         st.session_state.current_page = 'portfolio'
                         st.success(f"Welcome back, {username}!")
                         st.rerun()
