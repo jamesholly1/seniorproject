@@ -1442,10 +1442,9 @@ the full picture of each day's trading activity.
 """)
 
     st.info("""
-You have now covered eight strategies — from zero-complexity buy and hold to volume-weighted
-institutional benchmarking. The progression: baseline → trend-following → momentum →
-mean-reversion → volatility-adjusted → volume-weighted. Each layer added one new concept.
-Real quant systems combine multiple signals. You now have the vocabulary to understand how.
+**Coming next — Lesson 9:** *TWAP* — a simpler cousin of VWAP. Instead of weighting by
+volume, it weights by time equally. Comparing TWAP and VWAP signals shows you exactly
+how much volume information is worth.
 """)
 
 
@@ -1554,6 +1553,493 @@ def _run_vwap_backtest(ticker, period, threshold):
     if user_id and lesson_id:
         save_backtest_log(user_id, lesson_id, ticker, "VWAP", period,
                           strat_total - 1, strat_cagr, max_dd, sharpe, n_trades)
+        update_lesson_progress(user_id, lesson_id, "completed")
+
+
+# Lesson 9 — TWAP
+
+@_register(
+    lesson_id=9,
+    title="TWAP",
+    subtitle="Weight prices equally over time — the simpler, volume-free cousin of VWAP.",
+)
+def lesson_9_twap():
+    """
+    Render Lesson 9: TWAP Strategy.
+    """
+    st.title("Lesson 9 — TWAP")
+    st.caption("Complexity: ★★★☆☆  |  Prerequisites: Lesson 8 — VWAP")
+    st.markdown("---")
+
+    # Section 1: The Concept
+    st.header("1. The Concept")
+    st.markdown("""
+Lesson 8 introduced VWAP — the Volume Weighted Average Price — which weights each
+price by how many shares traded at that price. TWAP (Time Weighted Average Price)
+asks a simpler question: what is the average price across *all time periods* with
+no weighting at all?
+
+Every minute, hour, or day counts equally, regardless of volume. A quiet overnight
+session and a high-volume open carry the same weight. This makes TWAP:
+
+- **Simpler** — no volume data needed, just closing prices.
+- **Less reactive** — it cannot distinguish a high-conviction move from a thin one.
+- **More stable** — it drifts slowly as more data accumulates.
+
+TWAP is widely used by institutions as an execution benchmark, just like VWAP.
+A trader executing a large order "at TWAP" spaces trades evenly through the day
+rather than concentrating them where volume is highest. Comparing where your fills
+land relative to TWAP tells you whether you were a buyer or seller of liquidity.
+
+> When price falls **below TWAP** — it is trading below the time-averaged mean. **BUY**.
+> When price rises **above TWAP** — it is above the running average. **SELL**.
+""")
+
+    # Section 2: The Math
+    st.header("2. Why It Works — The Math")
+    st.markdown(r"""
+TWAP is the **expanding (cumulative) mean** of closing prices from the start of the
+data window up to the current period:
+
+$$\text{TWAP}_t = \frac{1}{t} \sum_{i=1}^{t} P_i$$
+
+| Symbol | Meaning |
+|--------|---------|
+| $\text{TWAP}_t$ | Time-weighted average price up to day $t$ |
+| $t$ | Number of periods elapsed since the start of the window |
+| $P_i$ | Closing price on day $i$ |
+| $\theta$ | Threshold — minimum deviation from TWAP to trigger a signal |
+
+The signal uses the same threshold structure as VWAP:
+
+$$\text{Signal}(t) = \begin{cases} \text{BUY}  & \text{if } P_t < \text{TWAP}_t \cdot (1 - \theta) \\ \text{SELL} & \text{if } P_t > \text{TWAP}_t \cdot (1 + \theta) \\ \text{HOLD} & \text{otherwise} \end{cases}$$
+
+**Plain English — TWAP vs VWAP:**
+
+Imagine a stock trades at $100 for most of the day on thin volume, then spikes to $120
+on a burst of heavy trading at the close.
+
+- **TWAP** sees the average over time: mostly $100, slightly above because of the spike.
+- **VWAP** sees the average weighted by volume: heavily influenced by the $120 spike
+  because most shares traded there.
+
+VWAP says the "true" price is close to $120 — the money agreed on it.
+TWAP says the "true" price is close to $100 — most of the *time* it was there.
+
+Neither is wrong. They answer different questions. Comparing them tells you whether
+the late-day move had conviction (large VWAP–TWAP spread = yes) or not (small spread = no).
+""")
+
+    # Section 3: The Code
+    st.header("3. The Code")
+    st.code("""
+def twap_strategy(data, threshold=0.001):
+    df = data.copy()
+
+    # Expanding mean: average of ALL closing prices from day 1 up to today
+    # Unlike rolling(), expanding() uses the full history — no fixed window
+    df['TWAP'] = df['Close'].expanding().mean()
+
+    # Signal: buy when price is below TWAP, sell when above
+    signals = pd.Series("HOLD", index=df.index)
+    signals[df['Close'] < df['TWAP'] * (1 - threshold)] = "BUY"
+    signals[df['Close'] > df['TWAP'] * (1 + threshold)] = "SELL"
+
+    return signals
+""", language="python")
+
+    with st.expander("Line-by-line explanation"):
+        st.markdown("""
+| Line | What it does | Why |
+|------|-------------|-----|
+| `.expanding().mean()` | Cumulative average from row 1 to the current row | Every period has equal weight — purely time-based, no volume |
+| `(1 - threshold)` / `(1 + threshold)` | Deadband around TWAP | Avoids trading on tiny deviations that could be noise or bid-ask spread |
+| `Close < TWAP * (1 - threshold)` → BUY | Price is below the time-average by more than the threshold | Mean reversion bet: price should drift back toward the running average |
+| `Close > TWAP * (1 + threshold)` → SELL | Price is above the time-average by more than the threshold | Overextended above the time-mean — expect cooling off |
+
+**TWAP vs VWAP at a glance:**
+
+| Property | TWAP | VWAP |
+|----------|------|------|
+| Weighting | Equal (each period counts once) | By volume (busy periods count more) |
+| Data needed | Close only | High, Low, Close, Volume |
+| Sensitivity to volume spikes | None | High |
+| Institutional use | Execution pacing | Execution quality benchmark |
+""")
+
+    # Section 4: Live Interactive Backtest
+    st.header("4. Live Interactive Backtest")
+    st.markdown("Try the same ticker and period you used for VWAP in Lesson 8 to compare the two strategies directly.")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        ticker = st.text_input("Ticker", value="AAPL", key="l9_ticker").upper().strip()
+    with col2:
+        twap_threshold = st.slider("Threshold (%)", 0.0, 3.0, 0.1, step=0.1, key="l9_threshold") / 100
+    with col3:
+        hist_period = st.selectbox("Period", ["1y", "2y", "5y"], index=1, key="l9_hist_period")
+
+    if st.button("Run Backtest", key="l9_run"):
+        _run_signal_backtest(ticker, hist_period, "TWAP", _twap_signals, twap_threshold)
+
+    if "l9_ran" not in st.session_state:
+        st.session_state.l9_ran = True
+        _run_signal_backtest("AAPL", "2y", "TWAP", _twap_signals, 0.001)
+
+    # Section 5: Key Takeaways
+    st.header("5. Key Takeaways")
+    st.success("""
+**Remember these three things:**
+
+1. **TWAP is volume-blind by design.** It treats a quiet holiday session the same as
+   a high-volume earnings day. This is a weakness for signal generation but a feature
+   for execution — spreading orders evenly through time minimises market impact.
+
+2. **The TWAP–VWAP spread is a signal itself.** When price is above TWAP but below
+   VWAP, volume-weighted buyers disagree with the time-weighted picture. Large
+   divergences between the two averages indicate unusual market conditions.
+
+3. **Expanding averages never forget.** Because TWAP uses all history, a price from
+   two years ago still affects today's TWAP. This makes it very stable but slow to
+   adapt. In fast-trending markets it will lag significantly.
+""")
+
+    st.info("""
+**Coming next — Lesson 10:** *Macro Indicators and Regime Detection* — steps back from
+individual price signals entirely. Instead of asking "what is this stock doing?", it asks
+"what is the market doing?" and uses that answer to decide whether to trade at all.
+""")
+
+
+def _twap_signals(prices, threshold):
+    """
+    Compute TWAP signals for a price series.
+    """
+    twap = prices.expanding().mean()
+    signals = pd.Series("HOLD", index=prices.index)
+    signals[prices < twap * (1 - threshold)] = "BUY"
+    signals[prices > twap * (1 + threshold)] = "SELL"
+    return signals
+
+
+# Lesson 10 — Macro Indicators and Regime Detection
+
+@_register(
+    lesson_id=10,
+    title="Macro Indicators & Regime Detection",
+    subtitle="Use market-wide signals like the VIX to determine whether conditions favour trading at all.",
+)
+def lesson_10_macro():
+    """
+    Render Lesson 10: Macro Indicators and Regime Detection.
+    """
+    st.title("Lesson 10 — Macro Indicators & Regime Detection")
+    st.caption("Complexity: ★★★★★  |  Prerequisites: All previous lessons")
+    st.markdown("---")
+
+    # Section 1: The Concept
+    st.header("1. The Concept")
+    st.markdown("""
+Every strategy in this course so far has looked at a single stock's price and made
+buy or sell decisions based on that price alone. But markets do not move in isolation.
+When the economy enters a recession, nearly every stock falls regardless of its
+individual momentum or RSI reading. When volatility spikes, mean reversion strategies
+stop working because prices overshoot far beyond historical norms.
+
+**Macro indicators** are data points that describe the state of the overall market or
+economy — not one stock, but the environment every stock is operating in. Using them
+lets you answer a more fundamental question before applying any strategy:
+
+> *Is this a market where my strategy is likely to work?*
+
+If the answer is no — because fear is spiking, liquidity is drying up, or the economy
+is contracting — the right move is often to step aside entirely rather than trade into
+a broken environment.
+
+**Regime detection** is the formal name for classifying the current market into one of
+several states (regimes) based on macro data. Common regimes are:
+- **Bullish** — low fear, rising prices, strategies that go long tend to work.
+- **Bearish** — high fear, falling prices, better to be in cash or short.
+- **Sideways** — ambiguous conditions, mixed signals, reduced position sizes.
+""")
+
+    # Section 2: The Math
+    st.header("2. Why It Works — The Math")
+    st.markdown(r"""
+**The VIX — the market's fear gauge**
+
+The VIX (CBOE Volatility Index) is the most widely used macro indicator. It measures
+the market's expectation of S&P 500 volatility over the next 30 days, derived from
+options prices:
+
+$$\text{VIX} = 100 \times \sqrt{\frac{2}{T} \sum_i \frac{\Delta K_i}{K_i^2} e^{rT} Q(K_i) - \frac{1}{T}\left(\frac{F}{K_0} - 1\right)^2}$$
+
+| Symbol | Meaning |
+|--------|---------|
+| $T$ | Time to expiration in years |
+| $K_i$ | Strike price of the $i$-th out-of-the-money option |
+| $\Delta K_i$ | Interval between strike prices |
+| $Q(K_i)$ | Midpoint of the bid-ask spread for each option |
+| $F$ | Forward index level derived from option prices |
+| $r$ | Risk-free interest rate |
+
+**Plain English:** You do not need to understand every term in that formula.
+The key insight is that options become expensive when investors expect big moves.
+VIX is essentially the price of insurance against market swings — when VIX is high,
+the market is scared and expecting turbulence. When VIX is low, complacency rules.
+
+**Regime thresholds:**
+
+$$\text{Regime}(t) = \begin{cases} \text{bullish}  & \text{if } \overline{\text{VIX}}_t < 20 \\ \text{bearish}  & \text{if } \overline{\text{VIX}}_t > 30 \\ \text{sideways} & \text{otherwise} \end{cases}$$
+
+where $\overline{\text{VIX}}_t$ is the average VIX level over the observation period.
+
+**Regime-based signal overlay:**
+
+$$\text{Signal}(t) = \begin{cases} \text{BUY}  & \text{if Regime} = \text{bullish} \\ \text{SELL} & \text{if Regime} = \text{bearish} \\ \text{HOLD} & \text{if Regime} = \text{sideways} \end{cases}$$
+
+The 20 and 30 thresholds are widely recognised conventions:
+- VIX below 20 historically corresponds to calm, trending bull markets.
+- VIX above 30 historically coincides with recessions, crashes, and crises.
+- The 20–30 band is transition territory — uncertainty dominates.
+""")
+
+    # Section 3: The Code
+    st.header("3. The Code")
+    st.markdown("**3a — Regime Detection (subsection)**")
+    st.code("""
+def regime_detection(macro_data):
+    vix_df = macro_data.get('vix')
+
+    # If we have no VIX data, default to sideways — don't trade blindly
+    if vix_df is None or vix_df.empty:
+        return "sideways"
+
+    # Average VIX over the full window determines the regime
+    avg_vix = vix_df['Close'].mean()
+
+    if avg_vix < 20:
+        return "bullish"    # Low fear — conditions favour going long
+    elif avg_vix > 30:
+        return "bearish"    # High fear — conditions favour cash or short
+    else:
+        return "sideways"   # Ambiguous — reduce exposure
+""", language="python")
+
+    with st.expander("Regime detection — line-by-line"):
+        st.markdown("""
+| Line | What it does | Why |
+|------|-------------|-----|
+| `macro_data.get('vix')` | Pulls the VIX DataFrame from a dict of macro inputs | Keeps the function flexible — other macro indicators can be added alongside VIX |
+| `if vix_df is None or vix_df.empty` | Guards against missing data | Without data you cannot classify a regime — default to the most conservative stance |
+| `vix_df['Close'].mean()` | Average VIX over the whole window | A single day's VIX spike does not redefine the regime — the average is more stable |
+| `avg_vix < 20` → bullish | Low average fear | Historically, VIX sub-20 periods have strong positive equity returns |
+| `avg_vix > 30` → bearish | High average fear | VIX above 30 has historically coincided with drawdowns of 20%+ |
+""")
+
+    st.markdown("**3b — Macro Strategy (using regime as a filter)**")
+    st.code("""
+def macro_regime_strategy(stock_data, vix_data, bullish_thresh=20, bearish_thresh=30):
+    signals = pd.Series("HOLD", index=stock_data.index)
+
+    for date in stock_data.index:
+        # Use VIX data up to this date to determine today's regime
+        vix_so_far = vix_data.loc[vix_data.index <= date, 'Close']
+        if vix_so_far.empty:
+            continue
+
+        avg_vix = vix_so_far.rolling(window=20, min_periods=1).mean().iloc[-1]
+
+        if avg_vix < bullish_thresh:
+            signals[date] = "BUY"    # Calm market — stay long
+        elif avg_vix > bearish_thresh:
+            signals[date] = "SELL"   # Fearful market — go to cash
+
+    return signals
+""", language="python")
+
+    with st.expander("Macro strategy — line-by-line"):
+        st.markdown("""
+| Line | What it does | Why |
+|------|-------------|-----|
+| `vix_data.loc[vix_data.index <= date]` | Only uses VIX data available up to each date | Prevents lookahead bias — you cannot know tomorrow's VIX today |
+| `.rolling(window=20).mean()` | 20-day rolling average of VIX | Smooths out single-day spikes; the regime should reflect the sustained environment |
+| `signals[date] = "BUY"` | Long signal when VIX is calm | Macro says conditions are favourable — apply your stock-level strategy |
+| `signals[date] = "SELL"` | Cash signal when VIX is fearful | Macro says step aside — individual signals are unreliable in high-fear environments |
+""")
+
+    # Section 4: Live Interactive Backtest
+    st.header("4. Live Interactive Backtest")
+    st.markdown("""
+This backtest fetches real VIX data and classifies each period as bullish, bearish,
+or sideways. It then applies a regime-based overlay to a stock of your choice —
+long in bullish regimes, cash in bearish ones.
+""")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        ticker = st.text_input("Ticker", value="SPY", key="l10_ticker").upper().strip()
+    with col2:
+        bull_thresh = st.slider("Bullish VIX threshold", 10, 25, 20, key="l10_bull")
+    with col3:
+        bear_thresh = st.slider("Bearish VIX threshold", 25, 45, 30, key="l10_bear")
+
+    hist_period = st.selectbox("Period", ["1y", "2y", "5y"], index=1, key="l10_hist_period")
+
+    if bull_thresh >= bear_thresh:
+        st.warning("Bullish threshold must be below bearish threshold.")
+    elif st.button("Run Backtest", key="l10_run"):
+        _run_regime_backtest(ticker, hist_period, bull_thresh, bear_thresh)
+
+    if "l10_ran" not in st.session_state:
+        st.session_state.l10_ran = True
+        _run_regime_backtest("SPY", "2y", 20, 30)
+
+    # Section 5: Key Takeaways
+    st.header("5. Key Takeaways")
+    st.success("""
+**Remember these three things:**
+
+1. **Regime detection is a filter, not a strategy.** It does not tell you which stock
+   to buy — it tells you whether the environment is right for buying at all. Layer it
+   on top of the signal strategies from earlier lessons for best results.
+
+2. **VIX is forward-looking, not backward-looking.** Unlike moving averages, which
+   summarise the past, VIX reflects what options markets *expect* over the next 30 days.
+   This makes it a leading indicator rather than a lagging one.
+
+3. **20 and 30 are starting points, not fixed rules.** In low-rate environments VIX
+   may stay structurally below 15. In volatile regimes it may rarely dip under 25.
+   Calibrate the thresholds to the historical distribution of the asset and period
+   you are trading.
+""")
+
+    st.info("""
+You have now completed all 10 lessons — from zero-complexity buy and hold to
+macro-driven regime detection. The full progression: baseline → trend-following →
+momentum → mean-reversion → volatility-adjusted → volume-weighted → time-weighted →
+macro-filtered. Real quant systems layer several of these together. You now have
+the vocabulary and tools to start building your own.
+""")
+
+
+def _run_regime_backtest(ticker, period, bull_thresh, bear_thresh):
+    """
+    Fetch VIX and stock data, apply regime detection, and render results.
+    """
+    with st.spinner("Loading VIX data..."):
+        vix_df = get_historical_data("^VIX", period=period)
+    with st.spinner(f"Loading {ticker} data..."):
+        stock_df = get_historical_data(ticker, period=period)
+
+    if vix_df.empty:
+        st.error("Could not load VIX data. Try a different period.")
+        return
+    if stock_df.empty:
+        st.error(f"Could not load data for {ticker}.")
+        return
+
+    vix_close = vix_df["Close"].dropna()
+    prices = stock_df["Close"].dropna()
+
+    # Regime per day using 20-day rolling VIX average
+    vix_smooth = vix_close.rolling(window=20, min_periods=1).mean()
+    regime = pd.Series("sideways", index=vix_smooth.index)
+    regime[vix_smooth < bull_thresh] = "bullish"
+    regime[vix_smooth > bear_thresh] = "bearish"
+
+    # Align regime to stock dates
+    regime_aligned = regime.reindex(prices.index, method="ffill")
+
+    # Convert regime to position
+    position = regime_aligned.map({"bullish": 1.0, "bearish": 0.0, "sideways": 0.5})
+    position = position.fillna(0.5)
+
+    market_returns = prices.pct_change()
+    strategy_returns = position.shift(1) * market_returns
+    strategy_equity = (1 + strategy_returns).cumprod()
+    bh_equity = prices / prices.iloc[0]
+
+    years = len(prices) / 252
+    strat_total = float(strategy_equity.iloc[-1])
+    strat_cagr = strat_total ** (1 / years) - 1
+    roll_peak = strategy_equity.cummax()
+    drawdown = (strategy_equity - roll_peak) / roll_peak
+    max_dd = float(drawdown.min())
+    clean = strategy_returns.dropna()
+    sharpe = float((clean.mean() / clean.std()) * np.sqrt(252)) if clean.std() > 0 else 0.0
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total Return", f"{(strat_total - 1) * 100:.1f}%")
+    m2.metric("CAGR", f"{strat_cagr * 100:.1f}%")
+    m3.metric("Max Drawdown", f"{max_dd * 100:.1f}%")
+    m4.metric("Sharpe Ratio", f"{sharpe:.2f}")
+
+    # VIX chart with regime shading
+    fig_vix = go.Figure()
+    fig_vix.add_trace(go.Scatter(
+        x=vix_close.index, y=vix_close.values,
+        name="VIX", line=dict(color="white", width=1.5),
+    ))
+    fig_vix.add_trace(go.Scatter(
+        x=vix_smooth.index, y=vix_smooth.values,
+        name="VIX 20-day avg", line=dict(color="yellow", width=2, dash="dot"),
+    ))
+    fig_vix.add_hline(y=bull_thresh, line_color="green", line_dash="dash",
+                      annotation_text=f"Bullish < {bull_thresh}")
+    fig_vix.add_hline(y=bear_thresh, line_color="red", line_dash="dash",
+                      annotation_text=f"Bearish > {bear_thresh}")
+    fig_vix.update_layout(
+        title="VIX — Fear Index with Regime Thresholds",
+        template="plotly_dark", height=300,
+        xaxis_title="Date", yaxis_title="VIX Level",
+        hovermode="x unified", legend=dict(x=0, y=1),
+    )
+    st.plotly_chart(fig_vix, use_container_width=True)
+
+    # Equity curve
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=strategy_equity.index, y=strategy_equity.values,
+        name="Regime Strategy", line=dict(color="cyan", width=2),
+    ))
+    fig.add_trace(go.Scatter(
+        x=bh_equity.index, y=bh_equity.values,
+        name="Buy & Hold", line=dict(color="orange", width=2, dash="dot"),
+    ))
+    fig.update_layout(
+        title=f"{ticker} — Regime Strategy vs Buy & Hold (start = $1.00)",
+        template="plotly_dark", height=380,
+        xaxis_title="Date", yaxis_title="Portfolio Value ($)",
+        hovermode="x unified", legend=dict(x=0, y=1),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    bh_total = float(bh_equity.iloc[-1])
+    bh_cagr = bh_total ** (1 / years) - 1
+    beat = strat_cagr > bh_cagr
+
+    # Regime breakdown
+    regime_counts = regime_aligned.value_counts()
+    st.markdown(f"""
+**Regime breakdown over {period}:**
+
+| Regime | Days | Interpretation |
+|--------|------|---------------|
+| Bullish (VIX < {bull_thresh}) | {regime_counts.get('bullish', 0)} | Full long exposure |
+| Sideways ({bull_thresh}–{bear_thresh}) | {regime_counts.get('sideways', 0)} | Half exposure |
+| Bearish (VIX > {bear_thresh}) | {regime_counts.get('bearish', 0)} | Cash |
+
+- The strategy returned **{(strat_total-1)*100:.1f}%** vs buy & hold's **{(bh_total-1)*100:.1f}%**.
+- {"The regime filter added alpha — CAGR " + f"{strat_cagr*100:.1f}% vs {bh_cagr*100:.1f}%." if beat else "Buy & hold won — CAGR " + f"{bh_cagr*100:.1f}% vs {strat_cagr*100:.1f}%. The regime filter reduced both losses and gains."}
+""")
+
+    # Persist result
+    user_id = st.session_state.get("learn_user_id")
+    lesson_id = st.session_state.get("learn_lesson")
+    if user_id and lesson_id:
+        save_backtest_log(user_id, lesson_id, ticker, "Macro Regime", period,
+                          strat_total - 1, strat_cagr, max_dd, sharpe, 0)
         update_lesson_progress(user_id, lesson_id, "completed")
 
 
