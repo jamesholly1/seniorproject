@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 _BASE_URL = "https://api0.itick.org"
 _HEADERS = {
     "accept": "application/json",
-    "token": "c95626de0cb54750a5b405a9430670b1c3947882ba1a4273b53cb60166c5430e",
+    "token": "205a99f7d0e3427f88620c9e1aee2730129d72fa7c5d4300b737782004424076",
 }
 
 # Maps period strings to approximate trading-day counts

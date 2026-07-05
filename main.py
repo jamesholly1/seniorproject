@@ -8,7 +8,7 @@ from news_api import get_news_factory
 from dashboard import show_dashboard_page
 from notifications import auto_check_thresholds_in_session, display_session_notifications
 from learn import show_learn_tab
-from tutor import show_tutor_tab
+from Backtesting_log_page import show_backtest_log_tab
 import streamlit as st
 import time
 import plotly.graph_objects as go
@@ -86,7 +86,7 @@ def show_portfolio_page():
     user_portfolio = get_user_tickers(st.session_state.user_id)
     
     # Create tabs for different sections - Dashboard is now the first tab
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["🏠 Dashboard", "📊 Portfolio", "📈 Charts", "📰 News", "🔔 Notifications", "📚 Learn", "🤖 Tutor"])
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["🏠 Dashboard", "📊 Portfolio", "📈 Charts", "📰 News", "🔔 Notifications", "📚 Learn", "📋 Backtest Log"])
     
     with tab1:
         show_dashboard_page()
@@ -104,7 +104,10 @@ def show_portfolio_page():
         show_notifications_tab()
 
     with tab6:
-        show_learn_tab()
+        show_learn_tab(st.session_state.user_id)
+
+    with tab7:
+        show_backtest_log_tab(st.session_state.user_id)
 
     with tab7:
         show_tutor_tab()
