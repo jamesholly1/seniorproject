@@ -1,11 +1,24 @@
 import sqlite3
-import hashlib
 import os
 from contextlib import contextmanager
 from typing import Optional, List, Tuple
+from datetime import datetime, timedelta
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError, InvalidHashError, VerificationError
 
 
 DATABASE_PATH = "portfolio.db"
+
+_password_hasher = PasswordHasher(
+    time_cost=2,
+    memory_cost=19456,
+    parallelism=1,
+)
+
+_DUMMY_HASH = _password_hasher.hash("placeholder")
+
+MAX_FAILED_ATTEMPTS = 5
+LOCKOUT_MINUTES = 15
 
 
 @contextmanager
@@ -14,7 +27,8 @@ def get_db_connection():
     conn = None
     try:
         conn = sqlite3.connect(DATABASE_PATH)
-        conn.row_factory = sqlite3.Row  # Enable column access by name
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.row_factory = sqlite3.Row
         yield conn
     except sqlite3.Error as e:
         if conn:
@@ -29,18 +43,20 @@ def initialize_database():
     """Initialize the database with required tables."""
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        
-        # Create users table
+
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT UNIQUE NOT NULL,
+                email TEXT UNIQUE NOT NULL,
                 password_hash TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_login_at TIMESTAMP,
+                failed_login_count INTEGER NOT NULL DEFAULT 0,
+                locked_until TIMESTAMP
             )
         ''')
-        
-        # Create user_tickers table
+
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS user_tickers (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,8 +67,7 @@ def initialize_database():
                 UNIQUE(user_id, ticker)
             )
         ''')
-        
-        # Create user_dashboard_widgets table for storing widget configurations
+
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS user_dashboard_widgets (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,8 +84,7 @@ def initialize_database():
                 UNIQUE(user_id, widget_id)
             )
         ''')
-        
-        # Create user_notification_thresholds table for storing price threshold notifications
+
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS user_notification_thresholds (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -199,55 +213,133 @@ def initialize_database():
 
 
 def hash_password(password: str) -> str:
-    """Hash a password using SHA-256."""
-    return hashlib.sha256(password.encode('utf-8')).hexdigest()
+    """Hash a password using Argon2id."""
+    return _password_hasher.hash(password)
 
 
 def verify_password(password: str, password_hash: str) -> bool:
-    """Verify a password against its hash."""
-    return hash_password(password) == password_hash
+    """Verify a password against an Argon2id hash."""
+    try:
+        _password_hasher.verify(password_hash, password)
+        return True
+    except (VerifyMismatchError, InvalidHashError, VerificationError):
+        return False
 
 
-def create_user(username: str, password: str) -> bool:
-    """
-    Create a new user with username and password.
-    Returns True if successful, False if username already exists.
-    """
+def validate_password_strength(password: str) -> Tuple[bool, str]:
+    if not password:
+        return False, "Password is required."
+    if len(password) < 8:
+        return False, "Password must be at least 8 characters."
+    if len(password) > 128:
+        return False, "Password must be 128 characters or fewer."
+    return True, ""
+
+
+def validate_email(email: str) -> Tuple[bool, str]:
+    if not email:
+        return False, "Email is required."
+    email = email.strip()
+    if len(email) > 254:
+        return False, "Email is too long."
+    if "@" not in email or "." not in email.split("@")[-1]:
+        return False, "Email format is invalid."
+    return True, ""
+
+
+def validate_username(username: str) -> Tuple[bool, str]:
+    if not username or not username.strip():
+        return False, "Username is required."
+    username = username.strip()
+    if len(username) < 3 or len(username) > 32:
+        return False, "Username must be between 3 and 32 characters."
+    return True, ""
+
+
+def create_user(username: str, email: str, password: str) -> Tuple[bool, str]:
+    """Create a new user. Returns (True, '') on success, (False, error) on failure."""
+    ok, err = validate_username(username)
+    if not ok:
+        return False, err
+
+    ok, err = validate_email(email)
+    if not ok:
+        return False, err
+
+    ok, err = validate_password_strength(password)
+    if not ok:
+        return False, err
+
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             password_hash = hash_password(password)
-            
             cursor.execute(
-                "INSERT INTO users (username, password_hash) VALUES (?, ?)",
-                (username, password_hash)
+                "INSERT INTO users (username, email, password_hash) VALUES (?, ?, ?)",
+                (username.strip(), email.lower().strip(), password_hash),
             )
             conn.commit()
-            return True
-            
+            return True, ""
     except sqlite3.IntegrityError:
-        # Username already exists
-        return False
+        return False, "An account with that username or email already exists."
 
 
 def authenticate_user(username: str, password: str) -> Optional[int]:
-    """
-    Authenticate a user with username and password.
-    Returns user_id if successful, None if authentication fails.
-    """
+    """Authenticate a user. Returns user_id on success, None on failure or lockout."""
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT user_id, password_hash FROM users WHERE username = ?",
-                (username,)
+                "SELECT user_id, password_hash, failed_login_count, locked_until "
+                "FROM users WHERE username = ?",
+                (username,),
             )
-            result = cursor.fetchone()
-            
-            if result and verify_password(password, result['password_hash']):
-                return result['user_id']
+            row = cursor.fetchone()
+
+            if row is None:
+                try:
+                    _password_hasher.verify(_DUMMY_HASH, password)
+                except Exception:
+                    pass
+                return None
+
+            if row["locked_until"]:
+                try:
+                    locked_until = datetime.fromisoformat(row["locked_until"])
+                    if locked_until > datetime.utcnow():
+                        return None
+                except ValueError:
+                    pass
+
+            user_id = row["user_id"]
+
+            if verify_password(password, row["password_hash"]):
+                cursor.execute(
+                    "UPDATE users SET failed_login_count = 0, locked_until = NULL, "
+                    "last_login_at = CURRENT_TIMESTAMP WHERE user_id = ?",
+                    (user_id,),
+                )
+                conn.commit()
+                return user_id
+
+            new_count = row["failed_login_count"] + 1
+            if new_count >= MAX_FAILED_ATTEMPTS:
+                locked_until = (
+                    datetime.utcnow() + timedelta(minutes=LOCKOUT_MINUTES)
+                ).isoformat()
+                cursor.execute(
+                    "UPDATE users SET failed_login_count = ?, locked_until = ? "
+                    "WHERE user_id = ?",
+                    (new_count, locked_until, user_id),
+                )
+            else:
+                cursor.execute(
+                    "UPDATE users SET failed_login_count = ? WHERE user_id = ?",
+                    (new_count, user_id),
+                )
+            conn.commit()
             return None
-            
+
     except sqlite3.Error:
         return None
 
@@ -258,19 +350,20 @@ def get_user_by_username(username: str) -> Optional[dict]:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT user_id, username, created_at FROM users WHERE username = ?",
-                (username,)
+                "SELECT user_id, username, email, created_at, last_login_at "
+                "FROM users WHERE username = ?",
+                (username,),
             )
-            result = cursor.fetchone()
-            
-            if result:
+            row = cursor.fetchone()
+            if row:
                 return {
-                    'user_id': result['user_id'],
-                    'username': result['username'],
-                    'created_at': result['created_at']
+                    "user_id": row["user_id"],
+                    "username": row["username"],
+                    "email": row["email"],
+                    "created_at": row["created_at"],
+                    "last_login_at": row["last_login_at"],
                 }
             return None
-            
     except sqlite3.Error:
         return None
 
