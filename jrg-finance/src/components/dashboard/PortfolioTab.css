@@ -1,0 +1,142 @@
+.port {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+  position: relative;
+}
+
+.port__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-md);
+}
+
+.port__title {
+  font-family: var(--font-heading);
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.port__subtitle {
+  font-size: 14px;
+  color: var(--color-text-muted);
+  margin-top: var(--space-xs);
+}
+
+.port__add-form {
+  display: flex;
+  gap: var(--space-sm);
+  align-items: flex-start;
+}
+
+.port__add-form .input-group {
+  flex: 1;
+}
+
+.port__symbol {
+  font-family: var(--font-heading);
+  color: var(--color-primary);
+  font-size: 15px;
+}
+
+.port__error {
+  color: var(--color-error);
+  font-size: 14px;
+  padding: var(--space-sm) 0;
+}
+
+/* Toast */
+.port__toast {
+  position: fixed;
+  bottom: var(--space-lg);
+  right: var(--space-lg);
+  padding: 12px 20px;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  font-weight: 500;
+  box-shadow: var(--shadow-lg);
+  z-index: 300;
+  animation: toast-in 0.2s ease;
+}
+
+.port__toast--success {
+  background: var(--color-success);
+  color: #fff;
+}
+
+.port__toast--info {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.port__toast--error {
+  background: var(--color-error);
+  color: #fff;
+}
+
+@keyframes toast-in {
+  from { transform: translateY(10px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+/* Confirm modal */
+.port__overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-md);
+}
+
+.port__modal {
+  background: var(--color-surface);
+  border-radius: var(--radius-xl);
+  padding: var(--space-xl);
+  max-width: 380px;
+  width: 100%;
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.port__modal h3 {
+  font-family: var(--font-heading);
+  font-size: 20px;
+}
+
+.port__modal p {
+  font-size: 14px;
+  color: var(--color-text-muted);
+}
+
+.port__modal-actions {
+  display: flex;
+  gap: var(--space-sm);
+  justify-content: flex-end;
+}
+
+@media (max-width: 768px) {
+  .port__title {
+    font-size: 22px;
+  }
+
+  .port__add-form {
+    flex-direction: column;
+  }
+
+  .port__add-form .btn {
+    width: 100%;
+  }
+
+  .port__toast {
+    left: var(--space-md);
+    right: var(--space-md);
+    text-align: center;
+  }
+}

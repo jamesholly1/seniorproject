@@ -1,0 +1,219 @@
+.dash {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+
+.dash__header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.dash__title {
+  font-family: var(--font-heading);
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.dash__subtitle {
+  font-size: 14px;
+  color: var(--color-text-muted);
+}
+
+/* Metrics row */
+.dash__metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-md);
+}
+
+.dash__symbol {
+  font-family: var(--font-heading);
+  color: var(--color-primary);
+  font-size: 14px;
+}
+
+/* Error */
+.dash__error {
+  color: var(--color-error);
+  font-size: 14px;
+  padding: var(--space-xs) 0;
+}
+
+.dash__error--note {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-style: italic;
+}
+
+/* Alert form */
+.alert-form {
+  margin-bottom: var(--space-sm);
+}
+
+.alert-form__fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-md);
+  align-items: flex-end;
+}
+
+.alert-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  min-width: 120px;
+}
+
+.alert-form__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.alert-form__select,
+.alert-form__input {
+  padding: 9px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 14px;
+  font-family: var(--font-body);
+  outline: none;
+  transition: var(--transition);
+}
+
+.alert-form__select:focus,
+.alert-form__input:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(13, 92, 106, 0.1);
+}
+
+.alert-form__direction {
+  display: flex;
+  gap: 2px;
+}
+
+.alert-form__dir-btn {
+  flex: 1;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  cursor: pointer;
+  transition: var(--transition);
+  font-family: var(--font-body);
+}
+
+.alert-form__dir-btn:first-child {
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+}
+
+.alert-form__dir-btn:last-child {
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+}
+
+.alert-form__dir-btn--above.alert-form__dir-btn--active {
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.alert-form__dir-btn--below.alert-form__dir-btn--active {
+  background: var(--color-error-bg);
+  color: var(--color-error);
+  border-color: var(--color-error);
+}
+
+.alert-form__submit {
+  align-self: flex-end;
+}
+
+.alert-form__error {
+  margin-top: var(--space-sm);
+  font-size: 13px;
+  color: var(--color-error);
+}
+
+/* Alert table divider */
+.dash__alerts-divider {
+  height: 1px;
+  background: var(--color-border);
+  margin: var(--space-md) 0 var(--space-sm);
+}
+
+/* Alert action buttons */
+.alert-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.alert-actions__btn {
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: var(--transition);
+  font-family: var(--font-body);
+  white-space: nowrap;
+}
+
+.alert-actions__btn:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.alert-actions__btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.alert-actions__btn--danger:hover:not(:disabled) {
+  border-color: var(--color-error);
+  color: var(--color-error);
+}
+
+.alert-actions__btn--loading {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* Responsive */
+@media (max-width: 1024px) {
+  .dash__metrics {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 768px) {
+  .dash__title {
+    font-size: 22px;
+  }
+
+  .dash__metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .alert-form__fields {
+    flex-direction: column;
+  }
+
+  .alert-form__field {
+    width: 100%;
+  }
+
+  .alert-form__submit {
+    width: 100%;
+  }
+}
