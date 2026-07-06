@@ -3,7 +3,7 @@ import streamlit as st
 import threading
 from typing import Dict, List
 import logging
-from stooq_data import get_historical_data as itick_get_historical_data, get_stock_info as itick_get_stock_info, get_multiple_stock_info as itick_get_multiple_stock_info
+from itick_data import get_historical_data as itick_get_historical_data, get_stock_info as itick_get_stock_info, get_multiple_stock_info as itick_get_multiple_stock_info
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

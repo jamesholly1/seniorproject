@@ -9,6 +9,7 @@ from news_api import get_news_factory
 from dashboard import show_dashboard_page
 from notifications import auto_check_thresholds_in_session, display_session_notifications
 from learn import show_learn_tab
+from Backtesting_log_page import show_backtest_log_tab
 from tutor import show_tutor_tab
 import streamlit as st
 import time
@@ -30,7 +31,7 @@ def main():
     # Initialize database
     initialize_database()
 
-    # Clear out any expired server-side sessions on each load (cheap at this scale).
+    # Clear expired sessions on each load.
     purge_expired_sessions()
 
     # Initialize session state for authentication
@@ -45,9 +46,7 @@ def main():
     if 'current_page' not in st.session_state:
         st.session_state.current_page = 'landing'
 
-    # Validate the server-side session. If the token is gone (expired or revoked
-    # on the server), drop the user back to the landing page. This is the
-    # server-side check that will carry over to the React + back-end split.
+    # If the session token is gone (expired or revoked), log the user out.
     if st.session_state.authenticated and st.session_state.session_token:
         if get_session(st.session_state.session_token) is None:
             st.session_state.authenticated = False
@@ -74,7 +73,7 @@ def show_portfolio_page():
         st.title(f"📈 {st.session_state.username}'s Investor Center")
     with col3:
         if st.button("🚪 Logout", type="secondary"):
-            # Invalidate the server-side session, then clear local state.
+            # Invalidate the session, then clear local state.
             delete_session(st.session_state.get("session_token"))
             st.session_state.authenticated = False
             st.session_state.user_id = None
@@ -105,7 +104,7 @@ def show_portfolio_page():
     user_portfolio = get_user_tickers(st.session_state.user_id)
     
     # Create tabs for different sections - Dashboard is now the first tab
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["🏠 Dashboard", "📊 Portfolio", "📈 Charts", "📰 News", "🔔 Notifications", "📚 Learn", "🤖 Tutor"])
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(["🏠 Dashboard", "📊 Portfolio", "📈 Charts", "📰 News", "🔔 Notifications", "📚 Learn", "📋 Backtest Log", "🤖 Tutor"])
 
     with tab1:
         show_dashboard_page()
@@ -123,9 +122,12 @@ def show_portfolio_page():
         show_notifications_tab()
 
     with tab6:
-        show_learn_tab()
+        show_learn_tab(st.session_state.user_id)
 
     with tab7:
+        show_backtest_log_tab(st.session_state.user_id)
+
+    with tab8:
         show_tutor_tab()
 
 
@@ -538,9 +540,7 @@ def show_login_form():
                         st.session_state.authenticated = True
                         st.session_state.user_id = user_id
                         st.session_state.username = username
-                        # Issue a server-side session token. In the Streamlit app
-                        # we hold it in session_state; in the React + back-end
-                        # split this is what gets delivered as an httpOnly cookie.
+                        # Issue a session token (becomes an httpOnly cookie after the React split).
                         st.session_state.session_token = create_session(user_id)
                         st.session_state.current_page = 'portfolio'
                         st.success(f"Welcome back, {username}!")

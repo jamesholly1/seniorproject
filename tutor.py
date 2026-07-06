@@ -1,19 +1,10 @@
 """
-tutor.py — AI Tutor for the JRG Financial Solutions learning platform.
+tutor.py — AI Tutor for JRG Financial Solutions.
 
-What this does:
-- Adds a chat-based tutor that answers investing questions in plain language.
-- The tutor is *grounded* in our own lesson content (a simple RAG approach):
-  whatever lesson the user currently has open in the Learn tab is read from the
-  database and injected into the prompt, so answers stay tied to the curriculum
-  instead of general knowledge.
-- Conversations are persisted to the database (ai_conversations / ai_messages)
-  so chat history survives reruns and logins, and ties to a user and a lesson.
-- Guardrails keep it educational: it explains concepts but does NOT give
-  personalized financial advice or buy/sell recommendations.
-
-The Anthropic API is ONLY called when the user submits a message (via the chat
-box). It never fires on its own or on the app's auto-refresh.
+Chat tutor that answers investing questions with educational guardrails (no
+financial advice). Conversations persist to ai_conversations / ai_messages so a
+logged-in user's history survives reruns and logins. The Anthropic API is only
+called when the user submits a message.
 """
 
 import os
@@ -21,34 +12,29 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from database import (
-    get_lesson,
     create_conversation,
     add_message,
     get_conversation_messages,
     get_user_conversations,
 )
 
-# Load ANTHROPIC_API_KEY from the .env file in the project root.
 load_dotenv()
 
-# Cheapest current model — plenty for a tutor. To use a smarter (pricier) model,
-# swap this for "claude-sonnet-4-6".
+# Cheapest current model; swap for "claude-sonnet-4-6" if a smarter one is needed.
 MODEL = "claude-haiku-4-5-20251001"
 
 
-def _build_system_prompt(lesson_id):
+def _build_system_prompt():
     """
-    Build the system prompt: guardrails + the current lesson's content (if any).
-    Lesson content is read from the database so there is one source of truth.
+    Build the system prompt: the tutor's job description plus its guardrails.
     """
-    guardrails = (
+    return (
         "You are the AI tutor for JRG Financial Solutions, a platform that teaches "
         "young adults the basics of investing and quantitative trading strategies.\n\n"
         "YOUR JOB:\n"
         "- Explain investing and quant concepts in plain, beginner-friendly language.\n"
         "- Keep answers concise and clear. Use short examples when helpful.\n"
-        "- When the user is on a lesson, ground your answers in that lesson's content.\n"
-        "- You may quiz the user on the current lesson if they ask you to.\n\n"
+        "- You may quiz the user on a concept if they ask you to.\n\n"
         "STRICT RULES (do not break these):\n"
         "- You are an educational tutor, NOT a financial advisor.\n"
         "- Never give personalized financial advice, buy/sell recommendations, or "
@@ -57,23 +43,8 @@ def _build_system_prompt(lesson_id):
         "here to teach, not to advise.\n"
         "- Stay on educational topics about investing, markets, and the lessons. If a "
         "question is unrelated, gently steer back to the learning material.\n"
-        "- If you are unsure or the lesson doesn't cover something, say so honestly."
+        "- If you are unsure about something, say so honestly."
     )
-
-    lesson = get_lesson(lesson_id) if lesson_id else None
-    if lesson:
-        lesson_text = lesson.get("content") or lesson.get("summary") or ""
-        guardrails += (
-            f'\n\nThe user is currently viewing the lesson titled "{lesson["title"]}". '
-            "Base your answers on it when relevant:\n" + lesson_text
-        )
-    else:
-        guardrails += (
-            "\n\nThe user is not currently inside a specific lesson. Answer general "
-            "beginner investing questions while following the rules above."
-        )
-
-    return guardrails
 
 
 def _get_client():
@@ -92,14 +63,10 @@ def _get_client():
 
 
 def _load_persisted_conversation(user_id):
-    """
-    On first open this session, pull the user's most recent conversation out of
-    the database so their history is there waiting for them. Sets
-    tutor_conversation_id and tutor_messages in session_state.
-    """
+    """Load the user's most recent conversation into session_state."""
     convos = get_user_conversations(user_id)
     if convos:
-        conversation_id = convos[0]["conversation_id"]
+        conversation_id = convos[0]["id"]
         st.session_state.tutor_conversation_id = conversation_id
         st.session_state.tutor_messages = [
             {"role": m["role"], "content": m["content"]}
@@ -117,7 +84,7 @@ def show_tutor_tab():
     """
     st.header("🤖 AI Tutor")
     st.caption(
-        "Ask questions about the lessons in plain language. "
+        "Ask questions about investing in plain language. "
         "The tutor explains concepts — it does not give financial advice."
     )
 
@@ -133,14 +100,6 @@ def show_tutor_tab():
         return
 
     user_id = st.session_state.get("user_id")
-
-    # Which lesson is the user currently on? (Set by the Learn tab; a lesson_id.)
-    current_lesson = st.session_state.get("learn_lesson")
-    lesson = get_lesson(current_lesson) if current_lesson else None
-    if lesson:
-        st.info(f"Context: answering based on the lesson \"{lesson['title']}\".")
-    else:
-        st.info("Context: general investing questions (open a lesson for grounded answers).")
 
     # Load any persisted conversation once per session (only when logged in).
     if user_id and "tutor_conversation_id" not in st.session_state:
@@ -161,7 +120,7 @@ def show_tutor_tab():
         # Start a persisted conversation on the first message (logged-in users).
         if user_id and st.session_state.tutor_conversation_id is None:
             st.session_state.tutor_conversation_id = create_conversation(
-                user_id, title=user_input[:60], lesson_id=current_lesson
+                user_id, title=user_input[:60]
             )
 
         # Show and store the user's message.
@@ -171,14 +130,14 @@ def show_tutor_tab():
         if st.session_state.tutor_conversation_id:
             add_message(st.session_state.tutor_conversation_id, "user", user_input)
 
-        # Call Claude with the guardrails + lesson context and full history.
+        # Call Claude with the guardrails and full history.
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
                 try:
                     response = client.messages.create(
                         model=MODEL,
                         max_tokens=700,
-                        system=_build_system_prompt(current_lesson),
+                        system=_build_system_prompt(),
                         messages=st.session_state.tutor_messages,
                     )
                     answer = response.content[0].text

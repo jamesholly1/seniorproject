@@ -21,8 +21,7 @@ _DUMMY_HASH = _password_hasher.hash("placeholder")
 MAX_FAILED_ATTEMPTS = 5
 LOCKOUT_MINUTES = 15
 
-# Server-side sessions: how long a token is valid, and the timestamp format we
-# store expiry in so string comparison and parsing stay consistent.
+# Session token validity and the stored-expiry timestamp format.
 SESSION_TTL_HOURS = 24
 _SESSION_TS_FORMAT = "%Y-%m-%d %H:%M:%S"
 
@@ -105,138 +104,129 @@ def initialize_database():
                 FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
             )
         ''')
-
-        # ------------------------------------------------------------------
-        # JRG Finance domain tables
-        # ------------------------------------------------------------------
-
-        # Lesson catalog. Holds the curriculum content itself, independent of
-        # any user. `slug` is a stable URL-friendly identifier; `order_index`
-        # controls display order within the curriculum.
+        
+        # Lessons catalogue
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS lessons (
-                lesson_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                slug TEXT UNIQUE NOT NULL,
-                title TEXT NOT NULL,
-                summary TEXT,
-                content TEXT,
-                topic TEXT,
-                difficulty TEXT NOT NULL DEFAULT 'beginner'
-                    CHECK (difficulty IN ('beginner', 'intermediate', 'advanced')),
-                order_index INTEGER NOT NULL DEFAULT 0,
-                estimated_minutes INTEGER,
-                is_published BOOLEAN NOT NULL DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                lesson_id    INTEGER PRIMARY KEY,
+                title        TEXT    NOT NULL,
+                subtitle     TEXT,
+                lesson_order INTEGER NOT NULL DEFAULT 0,
+                created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
 
-        # Per-user progress through each lesson. One row per (user, lesson).
+        # Per-user lesson progress
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS user_lesson_progress (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                lesson_id INTEGER NOT NULL,
-                status TEXT NOT NULL DEFAULT 'not_started'
-                    CHECK (status IN ('not_started', 'in_progress', 'completed')),
-                progress_percent INTEGER NOT NULL DEFAULT 0
-                    CHECK (progress_percent BETWEEN 0 AND 100),
-                quiz_score REAL,
-                started_at TIMESTAMP,
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id      INTEGER NOT NULL,
+                lesson_id    INTEGER NOT NULL,
+                status       TEXT    NOT NULL DEFAULT 'not_started'
+                                 CHECK (status IN ('not_started', 'in_progress', 'completed')),
+                started_at   TIMESTAMP,
                 completed_at TIMESTAMP,
-                last_accessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id)   REFERENCES users   (user_id)   ON DELETE CASCADE,
                 FOREIGN KEY (lesson_id) REFERENCES lessons (lesson_id) ON DELETE CASCADE,
-                UNIQUE(user_id, lesson_id)
+                UNIQUE (user_id, lesson_id)
             )
         ''')
 
-        # Current holdings in a user's practice (backtesting) portfolio.
-        # One row per (user, ticker); quantity/avg_cost are maintained as the
-        # user buys and sells.
+        # Practice portfolio holdings
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS portfolio_holdings (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                ticker TEXT NOT NULL,
-                quantity REAL NOT NULL DEFAULT 0,
-                avg_cost_basis REAL NOT NULL DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER NOT NULL,
+                ticker     TEXT    NOT NULL,
+                shares     REAL    NOT NULL CHECK (shares > 0),
+                avg_cost   REAL    NOT NULL CHECK (avg_cost > 0),
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE,
-                UNIQUE(user_id, ticker)
+                UNIQUE (user_id, ticker)
             )
         ''')
 
-        # Immutable log of simulated trades. Drives portfolio_holdings and the
-        # trade-history view. `trade_date` is the historical price date used by
-        # the backtester; `executed_at` is when the user placed the trade.
+        # Practice portfolio transaction history
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS transactions (
-                transaction_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                ticker TEXT NOT NULL,
-                action TEXT NOT NULL CHECK (action IN ('buy', 'sell')),
-                quantity REAL NOT NULL CHECK (quantity > 0),
-                price REAL NOT NULL CHECK (price >= 0),
-                total_amount REAL NOT NULL,
-                trade_date DATE,
-                executed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id          INTEGER NOT NULL,
+                ticker           TEXT    NOT NULL,
+                transaction_type TEXT    NOT NULL CHECK (transaction_type IN ('BUY', 'SELL')),
+                shares           REAL    NOT NULL CHECK (shares > 0),
+                price            REAL    NOT NULL CHECK (price > 0),
+                total_value      REAL    NOT NULL,
+                executed_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
             )
         ''')
 
-        # AI tutor conversations. Optionally tied to the lesson the user was on
-        # when they opened the chat.
+        # AI tutor conversation threads
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS ai_conversations (
-                conversation_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                lesson_id INTEGER,
-                title TEXT,
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id    INTEGER NOT NULL,
+                title      TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE,
-                FOREIGN KEY (lesson_id) REFERENCES lessons (lesson_id) ON DELETE SET NULL
+                FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
             )
         ''')
 
-        # Individual messages within an AI conversation.
+        # AI tutor messages
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS ai_messages (
-                message_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 conversation_id INTEGER NOT NULL,
-                role TEXT NOT NULL CHECK (role IN ('system', 'user', 'assistant')),
-                content TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (conversation_id) REFERENCES ai_conversations (conversation_id)
-                    ON DELETE CASCADE
+                role            TEXT    NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+                content         TEXT    NOT NULL,
+                created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (conversation_id) REFERENCES ai_conversations (id) ON DELETE CASCADE
             )
         ''')
 
-        # Server-side sessions for the eventual React + back-end split. The
-        # token is an opaque random id; all session state lives in the row so it
-        # can be expired or revoked server-side (Streamlit's in-memory
-        # session_state won't survive that move).
+        # Backtest run history from the Learn tab
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS backtest_logs (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id       INTEGER NOT NULL,
+                lesson_id     INTEGER,
+                ticker        TEXT    NOT NULL,
+                strategy_name TEXT    NOT NULL,
+                period        TEXT    NOT NULL,
+                total_return  REAL,
+                cagr          REAL,
+                max_drawdown  REAL,
+                sharpe        REAL,
+                n_trades      INTEGER,
+                ran_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
+            )
+        ''')
+
+        # Indexes on common lookups
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_lesson_progress_user   ON user_lesson_progress (user_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_lesson_progress_lesson ON user_lesson_progress (lesson_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_portfolio_holdings_user     ON portfolio_holdings   (user_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_transactions_user           ON transactions         (user_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_transactions_ticker         ON transactions         (ticker)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_ai_conversations_user       ON ai_conversations     (user_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_ai_messages_conversation    ON ai_messages          (conversation_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_backtest_logs_user          ON backtest_logs        (user_id)')
+
+        # Server-side sessions (opaque token, expiry lives in the row).
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS sessions (
-                session_token TEXT PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                expires_at TIMESTAMP NOT NULL,
+                session_token    TEXT PRIMARY KEY,
+                user_id          INTEGER NOT NULL,
+                created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at       TIMESTAMP NOT NULL,
                 last_accessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
             )
         ''')
-
-        # Helpful indexes for the most common lookups.
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_progress_user ON user_lesson_progress (user_id)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_holdings_user ON portfolio_holdings (user_id)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions (user_id)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_conversations_user ON ai_conversations (user_id)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_messages_conversation ON ai_messages (conversation_id)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions (expires_at)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_sessions_user             ON sessions             (user_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_sessions_expires          ON sessions             (expires_at)')
 
         conn.commit()
 
@@ -842,203 +832,108 @@ def validate_threshold_input(ticker: str, threshold_type: str, threshold_price: 
     return True, ""
 
 
-# ======================================================================
-# JRG Finance domain operations
-# ======================================================================
+# Lesson progress helpers
 
-# ---- Lessons ---------------------------------------------------------
-
-def create_lesson(slug: str, title: str, summary: str = "", content: str = "",
-                  topic: str = "", difficulty: str = "beginner",
-                  order_index: int = 0, estimated_minutes: Optional[int] = None,
-                  is_published: bool = False) -> Optional[int]:
-    """Create a lesson. Returns the new lesson_id, or None on failure."""
-    if difficulty not in ("beginner", "intermediate", "advanced"):
-        return None
-    if not slug or not slug.strip() or not title or not title.strip():
-        return None
+def get_lesson_progress(user_id):
+    """
+    Return a dict mapping lesson_id to status for the given user.
+    Missing entries mean 'not_started'.
+    """
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO lessons
-                (slug, title, summary, content, topic, difficulty,
-                 order_index, estimated_minutes, is_published)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (slug.strip(), title.strip(), summary, content, topic,
-                  difficulty, order_index, estimated_minutes, 1 if is_published else 0))
-            conn.commit()
-            return cursor.lastrowid
-    except sqlite3.IntegrityError:
-        return None
-
-
-def get_lesson(lesson_id: int) -> Optional[dict]:
-    """Get a single lesson by id."""
-    try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM lessons WHERE lesson_id = ?", (lesson_id,))
-            row = cursor.fetchone()
-            return dict(row) if row else None
+            cursor.execute(
+                "SELECT lesson_id, status FROM user_lesson_progress WHERE user_id = ?",
+                (user_id,)
+            )
+            return {row["lesson_id"]: row["status"] for row in cursor.fetchall()}
     except sqlite3.Error:
-        return None
+        return {}
 
 
-def get_lesson_by_slug(slug: str) -> Optional[dict]:
-    """Get a single lesson by its slug."""
+def update_lesson_progress(user_id, lesson_id, status):
+    """
+    Upsert lesson progress for a user. status must be 'not_started', 'in_progress', or 'completed'.
+    Returns True if successful.
+    """
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM lessons WHERE slug = ?", (slug,))
-            row = cursor.fetchone()
-            return dict(row) if row else None
-    except sqlite3.Error:
-        return None
-
-
-def get_all_lessons(published_only: bool = False) -> List[dict]:
-    """Get all lessons ordered by curriculum position."""
-    try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            query = "SELECT * FROM lessons"
-            if published_only:
-                query += " WHERE is_published = 1"
-            query += " ORDER BY order_index, lesson_id"
-            cursor.execute(query)
-            return [dict(row) for row in cursor.fetchall()]
-    except sqlite3.Error:
-        return []
-
-
-# ---- Lesson progress -------------------------------------------------
-
-def upsert_lesson_progress(user_id: int, lesson_id: int, status: str = "in_progress",
-                           progress_percent: int = 0,
-                           quiz_score: Optional[float] = None) -> bool:
-    """Create or update a user's progress on a lesson."""
-    if status not in ("not_started", "in_progress", "completed"):
-        return False
-    progress_percent = max(0, min(100, int(progress_percent)))
-    if status == "completed":
-        progress_percent = 100
-    try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            completed_at = "CURRENT_TIMESTAMP" if status == "completed" else "NULL"
-            cursor.execute(f'''
-                INSERT INTO user_lesson_progress
-                    (user_id, lesson_id, status, progress_percent, quiz_score,
-                     started_at, completed_at, last_accessed_at)
-                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, {completed_at}, CURRENT_TIMESTAMP)
-                ON CONFLICT(user_id, lesson_id) DO UPDATE SET
-                    status = excluded.status,
-                    progress_percent = excluded.progress_percent,
-                    quiz_score = COALESCE(excluded.quiz_score, user_lesson_progress.quiz_score),
-                    completed_at = CASE WHEN excluded.status = 'completed'
-                                        THEN CURRENT_TIMESTAMP
-                                        ELSE user_lesson_progress.completed_at END,
-                    last_accessed_at = CURRENT_TIMESTAMP
-            ''', (user_id, lesson_id, status, progress_percent, quiz_score))
+            if status == "in_progress":
+                cursor.execute('''
+                    INSERT INTO user_lesson_progress (user_id, lesson_id, status, started_at)
+                    VALUES (?, ?, 'in_progress', CURRENT_TIMESTAMP)
+                    ON CONFLICT (user_id, lesson_id) DO UPDATE
+                    SET status = CASE WHEN status = 'completed' THEN 'completed' ELSE 'in_progress' END,
+                        started_at = COALESCE(started_at, CURRENT_TIMESTAMP)
+                ''', (user_id, lesson_id))
+            elif status == "completed":
+                cursor.execute('''
+                    INSERT INTO user_lesson_progress (user_id, lesson_id, status, started_at, completed_at)
+                    VALUES (?, ?, 'completed', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    ON CONFLICT (user_id, lesson_id) DO UPDATE
+                    SET status = 'completed',
+                        completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP)
+                ''', (user_id, lesson_id))
             conn.commit()
             return True
     except sqlite3.Error:
         return False
 
 
-def get_lesson_progress(user_id: int, lesson_id: int) -> Optional[dict]:
-    """Get a user's progress on a single lesson."""
-    try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT * FROM user_lesson_progress WHERE user_id = ? AND lesson_id = ?",
-                (user_id, lesson_id),
-            )
-            row = cursor.fetchone()
-            return dict(row) if row else None
-    except sqlite3.Error:
-        return None
+# Backtest log helpers
 
-
-def get_user_progress(user_id: int) -> List[dict]:
-    """Get all lesson progress rows for a user, with lesson titles joined in."""
+def save_backtest_log(user_id, lesson_id, ticker, strategy_name, period,
+                      total_return, cagr, max_drawdown, sharpe, n_trades):
+    """
+    Save a backtest result to the log. Returns True if successful.
+    """
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                SELECT p.*, l.title, l.slug
-                FROM user_lesson_progress p
-                JOIN lessons l ON l.lesson_id = p.lesson_id
-                WHERE p.user_id = ?
-                ORDER BY l.order_index, l.lesson_id
+                INSERT INTO backtest_logs
+                    (user_id, lesson_id, ticker, strategy_name, period,
+                     total_return, cagr, max_drawdown, sharpe, n_trades)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (user_id, lesson_id, ticker.upper(), strategy_name, period,
+                  total_return, cagr, max_drawdown, sharpe, n_trades))
+            conn.commit()
+            return True
+    except sqlite3.Error:
+        return False
+
+
+def get_user_backtest_logs(user_id):
+    """
+    Return all backtest log rows for a user, newest first.
+    """
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT id, lesson_id, ticker, strategy_name, period,
+                       total_return, cagr, max_drawdown, sharpe, n_trades, ran_at
+                FROM backtest_logs
+                WHERE user_id = ?
+                ORDER BY ran_at DESC
             ''', (user_id,))
             return [dict(row) for row in cursor.fetchall()]
     except sqlite3.Error:
         return []
 
 
-# ---- Portfolio holdings ----------------------------------------------
-
-def upsert_holding(user_id: int, ticker: str, quantity: float,
-                   avg_cost_basis: float) -> bool:
-    """Set the quantity and average cost basis of a holding for a user."""
-    try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO portfolio_holdings
-                    (user_id, ticker, quantity, avg_cost_basis, updated_at)
-                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(user_id, ticker) DO UPDATE SET
-                    quantity = excluded.quantity,
-                    avg_cost_basis = excluded.avg_cost_basis,
-                    updated_at = CURRENT_TIMESTAMP
-            ''', (user_id, ticker.upper(), quantity, avg_cost_basis))
-            conn.commit()
-            return True
-    except sqlite3.Error:
-        return False
-
-
-def get_holding(user_id: int, ticker: str) -> Optional[dict]:
-    """Get a single holding for a user."""
+def delete_backtest_log(log_id, user_id):
+    """
+    Delete a single backtest log entry. Requires user_id to prevent cross-user deletion.
+    Returns True if a row was deleted.
+    """
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT * FROM portfolio_holdings WHERE user_id = ? AND ticker = ?",
-                (user_id, ticker.upper()),
-            )
-            row = cursor.fetchone()
-            return dict(row) if row else None
-    except sqlite3.Error:
-        return None
-
-
-def get_user_holdings(user_id: int) -> List[dict]:
-    """Get all holdings for a user."""
-    try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT * FROM portfolio_holdings WHERE user_id = ? ORDER BY ticker",
-                (user_id,),
-            )
-            return [dict(row) for row in cursor.fetchall()]
-    except sqlite3.Error:
-        return []
-
-
-def remove_holding(user_id: int, ticker: str) -> bool:
-    """Remove a holding (e.g. after selling the entire position)."""
-    try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "DELETE FROM portfolio_holdings WHERE user_id = ? AND ticker = ?",
-                (user_id, ticker.upper()),
+                "DELETE FROM backtest_logs WHERE id = ? AND user_id = ?",
+                (log_id, user_id)
             )
             conn.commit()
             return cursor.rowcount > 0
@@ -1046,63 +941,16 @@ def remove_holding(user_id: int, ticker: str) -> bool:
         return False
 
 
-# ---- Transactions (trade history) ------------------------------------
-
-def record_transaction(user_id: int, ticker: str, action: str, quantity: float,
-                       price: float, trade_date: Optional[str] = None) -> Optional[int]:
-    """Record a simulated trade. Returns the transaction_id, or None on failure."""
-    if action not in ("buy", "sell"):
-        return None
-    if quantity <= 0 or price < 0:
-        return None
-    try:
-        total_amount = quantity * price
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                INSERT INTO transactions
-                    (user_id, ticker, action, quantity, price, total_amount, trade_date)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (user_id, ticker.upper(), action, quantity, price,
-                  total_amount, trade_date))
-            conn.commit()
-            return cursor.lastrowid
-    except sqlite3.Error:
-        return None
-
-
-def get_user_transactions(user_id: int, ticker: Optional[str] = None) -> List[dict]:
-    """Get a user's trade history, most recent first. Optionally filter by ticker."""
-    try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            if ticker:
-                cursor.execute(
-                    "SELECT * FROM transactions WHERE user_id = ? AND ticker = ? "
-                    "ORDER BY executed_at DESC",
-                    (user_id, ticker.upper()),
-                )
-            else:
-                cursor.execute(
-                    "SELECT * FROM transactions WHERE user_id = ? ORDER BY executed_at DESC",
-                    (user_id,),
-                )
-            return [dict(row) for row in cursor.fetchall()]
-    except sqlite3.Error:
-        return []
-
-
 # ---- AI tutor conversations ------------------------------------------
 
-def create_conversation(user_id: int, title: str = "",
-                        lesson_id: Optional[int] = None) -> Optional[int]:
-    """Start a new AI tutor conversation. Returns the conversation_id."""
+def create_conversation(user_id: int, title: str = "") -> Optional[int]:
+    """Start a new AI tutor conversation. Returns the conversation id, or None."""
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "INSERT INTO ai_conversations (user_id, lesson_id, title) VALUES (?, ?, ?)",
-                (user_id, lesson_id, title),
+                "INSERT INTO ai_conversations (user_id, title) VALUES (?, ?)",
+                (user_id, title),
             )
             conn.commit()
             return cursor.lastrowid
@@ -1111,7 +959,7 @@ def create_conversation(user_id: int, title: str = "",
 
 
 def add_message(conversation_id: int, role: str, content: str) -> Optional[int]:
-    """Append a message to a conversation. Returns the message_id."""
+    """Append a message to a conversation. Returns the message id, or None."""
     if role not in ("system", "user", "assistant"):
         return None
     if not content:
@@ -1120,12 +968,13 @@ def add_message(conversation_id: int, role: str, content: str) -> Optional[int]:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "INSERT INTO ai_messages (conversation_id, role, content) VALUES (?, ?, ?)",
+                "INSERT INTO ai_messages (conversation_id, role, content) "
+                "VALUES (?, ?, ?)",
                 (conversation_id, role, content),
             )
             cursor.execute(
                 "UPDATE ai_conversations SET updated_at = CURRENT_TIMESTAMP "
-                "WHERE conversation_id = ?",
+                "WHERE id = ?",
                 (conversation_id,),
             )
             conn.commit()
@@ -1140,7 +989,7 @@ def get_conversation_messages(conversation_id: int) -> List[dict]:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT * FROM ai_messages WHERE conversation_id = ? ORDER BY message_id",
+                "SELECT * FROM ai_messages WHERE conversation_id = ? ORDER BY id",
                 (conversation_id,),
             )
             return [dict(row) for row in cursor.fetchall()]
@@ -1149,12 +998,13 @@ def get_conversation_messages(conversation_id: int) -> List[dict]:
 
 
 def get_user_conversations(user_id: int) -> List[dict]:
-    """Get all conversations for a user, most recently updated first."""
+    """Get a user's conversations, most recently updated first."""
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT * FROM ai_conversations WHERE user_id = ? ORDER BY updated_at DESC",
+                "SELECT * FROM ai_conversations WHERE user_id = ? "
+                "ORDER BY updated_at DESC",
                 (user_id,),
             )
             return [dict(row) for row in cursor.fetchall()]
@@ -1162,27 +1012,7 @@ def get_user_conversations(user_id: int) -> List[dict]:
         return []
 
 
-def delete_conversation(conversation_id: int) -> bool:
-    """Delete a conversation and its messages (messages cascade)."""
-    try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "DELETE FROM ai_conversations WHERE conversation_id = ?",
-                (conversation_id,),
-            )
-            conn.commit()
-            return cursor.rowcount > 0
-    except sqlite3.Error:
-        return False
-
-
 # ---- Server-side sessions --------------------------------------------
-#
-# These back the auth carry-over for the planned React + back-end split.
-# The token is opaque (no data baked in); everything lives in the row, so a
-# session can be expired by time or revoked by deleting it. Expiry is compared
-# in Python against datetime.now() so creation and validation use one clock.
 
 def create_session(user_id: int, ttl_hours: int = SESSION_TTL_HOURS) -> Optional[str]:
     """Create a session for a user and return an opaque token, or None on error."""
