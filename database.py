@@ -1,5 +1,6 @@
 import sqlite3
 import os
+import secrets
 from contextlib import contextmanager
 from typing import Optional, List, Tuple
 from datetime import datetime, timedelta
@@ -19,6 +20,10 @@ _DUMMY_HASH = _password_hasher.hash("placeholder")
 
 MAX_FAILED_ATTEMPTS = 5
 LOCKOUT_MINUTES = 15
+
+# Session token validity and the stored-expiry timestamp format.
+SESSION_TTL_HOURS = 24
+_SESSION_TS_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 @contextmanager
@@ -208,6 +213,20 @@ def initialize_database():
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_ai_conversations_user       ON ai_conversations     (user_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_ai_messages_conversation    ON ai_messages          (conversation_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_backtest_logs_user          ON backtest_logs        (user_id)')
+
+        # Server-side sessions (opaque token, expiry lives in the row).
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_token    TEXT PRIMARY KEY,
+                user_id          INTEGER NOT NULL,
+                created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at       TIMESTAMP NOT NULL,
+                last_accessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_sessions_user             ON sessions             (user_id)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_sessions_expires          ON sessions             (expires_at)')
 
         conn.commit()
 
@@ -920,6 +939,158 @@ def delete_backtest_log(log_id, user_id):
             return cursor.rowcount > 0
     except sqlite3.Error:
         return False
+
+
+# ---- AI tutor conversations ------------------------------------------
+
+def create_conversation(user_id: int, title: str = "") -> Optional[int]:
+    """Start a new AI tutor conversation. Returns the conversation id, or None."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO ai_conversations (user_id, title) VALUES (?, ?)",
+                (user_id, title),
+            )
+            conn.commit()
+            return cursor.lastrowid
+    except sqlite3.Error:
+        return None
+
+
+def add_message(conversation_id: int, role: str, content: str) -> Optional[int]:
+    """Append a message to a conversation. Returns the message id, or None."""
+    if role not in ("system", "user", "assistant"):
+        return None
+    if not content:
+        return None
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO ai_messages (conversation_id, role, content) "
+                "VALUES (?, ?, ?)",
+                (conversation_id, role, content),
+            )
+            cursor.execute(
+                "UPDATE ai_conversations SET updated_at = CURRENT_TIMESTAMP "
+                "WHERE id = ?",
+                (conversation_id,),
+            )
+            conn.commit()
+            return cursor.lastrowid
+    except sqlite3.Error:
+        return None
+
+
+def get_conversation_messages(conversation_id: int) -> List[dict]:
+    """Get all messages in a conversation, oldest first."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM ai_messages WHERE conversation_id = ? ORDER BY id",
+                (conversation_id,),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+    except sqlite3.Error:
+        return []
+
+
+def get_user_conversations(user_id: int) -> List[dict]:
+    """Get a user's conversations, most recently updated first."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM ai_conversations WHERE user_id = ? "
+                "ORDER BY updated_at DESC",
+                (user_id,),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+    except sqlite3.Error:
+        return []
+
+
+# ---- Server-side sessions --------------------------------------------
+
+def create_session(user_id: int, ttl_hours: int = SESSION_TTL_HOURS) -> Optional[str]:
+    """Create a session for a user and return an opaque token, or None on error."""
+    token = secrets.token_urlsafe(32)
+    expires_at = datetime.now() + timedelta(hours=ttl_hours)
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO sessions (session_token, user_id, expires_at) "
+                "VALUES (?, ?, ?)",
+                (token, user_id, expires_at.strftime(_SESSION_TS_FORMAT)),
+            )
+            conn.commit()
+            return token
+    except sqlite3.Error:
+        return None
+
+
+def get_session(token: str) -> Optional[dict]:
+    """Return the session row (including user_id) if the token exists and has not
+    expired. Expired tokens are deleted and treated as no session."""
+    if not token:
+        return None
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM sessions WHERE session_token = ?", (token,)
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            expires_at = datetime.strptime(row["expires_at"], _SESSION_TS_FORMAT)
+            if expires_at <= datetime.now():
+                cursor.execute(
+                    "DELETE FROM sessions WHERE session_token = ?", (token,)
+                )
+                conn.commit()
+                return None
+            cursor.execute(
+                "UPDATE sessions SET last_accessed_at = CURRENT_TIMESTAMP "
+                "WHERE session_token = ?",
+                (token,),
+            )
+            conn.commit()
+            return dict(row)
+    except (sqlite3.Error, ValueError):
+        return None
+
+
+def delete_session(token: str) -> bool:
+    """Invalidate a single session (logout). True if a row was removed."""
+    if not token:
+        return False
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM sessions WHERE session_token = ?", (token,))
+            conn.commit()
+            return cursor.rowcount > 0
+    except sqlite3.Error:
+        return False
+
+
+def purge_expired_sessions() -> int:
+    """Delete every expired session. Returns the number of rows removed."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM sessions WHERE expires_at <= ?",
+                (datetime.now().strftime(_SESSION_TS_FORMAT),),
+            )
+            conn.commit()
+            return cursor.rowcount
+    except sqlite3.Error:
+        return 0
 
 
 # Initialize database when module is imported

@@ -1,4 +1,5 @@
 venv/
+.venv/
 __pycache__/
 *.pyc
 *.pyo
@@ -9,3 +10,5 @@ dist/
 build/
 .env
 portfolio.db
+test_*.db
+*.db-journal
