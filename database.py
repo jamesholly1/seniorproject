@@ -1093,6 +1093,18 @@ def purge_expired_sessions() -> int:
         return 0
 
 
+def revoke_user_sessions(user_id: int) -> int:
+    """Delete all of a user's sessions (log out everywhere). Returns the count removed."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+            conn.commit()
+            return cursor.rowcount
+    except sqlite3.Error:
+        return 0
+
+
 # Initialize database when module is imported
 if __name__ == "__main__":
     initialize_database()

@@ -18,6 +18,7 @@ import database
 from database import (
     initialize_database, create_user, authenticate_user,
     create_session, get_session, delete_session, purge_expired_sessions,
+    revoke_user_sessions,
 )
 
 # Keep the throwaway database out of the repo so a half-finished run never
@@ -111,12 +112,36 @@ def test_session_cascade_on_user_delete():
         _cleanup()
 
 
+def test_revoke_user_sessions():
+    print("Testing log-out-everywhere revocation...")
+    _setup()
+    try:
+        user_id = _make_user("revoke_user")
+        token_a = create_session(user_id)
+        token_b = create_session(user_id)
+        assert get_session(token_a) is not None
+        assert get_session(token_b) is not None
+
+        # Revoking should drop every session the user has.
+        removed = revoke_user_sessions(user_id)
+        assert removed == 2, "both sessions should be revoked"
+        assert get_session(token_a) is None
+        assert get_session(token_b) is None
+
+        # A second call finds nothing left to remove.
+        assert revoke_user_sessions(user_id) == 0
+        print("Revocation tests passed.")
+    finally:
+        _cleanup()
+
+
 def main():
     print("Starting session tests...\n")
     try:
         test_session_lifecycle()
         test_session_expiry()
         test_session_cascade_on_user_delete()
+        test_revoke_user_sessions()
         print("\nAll session tests passed.")
     except AssertionError as e:
         print(f"\nTest failed: {e}")

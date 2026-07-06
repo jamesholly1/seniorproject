@@ -2,7 +2,8 @@ from finance_data_improved import get_stock_info, get_historical_data, get_multi
 from database import (
     initialize_database, create_user, authenticate_user, get_user_by_username,
     add_user_ticker, remove_user_ticker, get_user_tickers, clear_user_tickers,
-    create_session, get_session, delete_session, purge_expired_sessions
+    create_session, get_session, delete_session, purge_expired_sessions,
+    revoke_user_sessions
 )
 import pandas as pd
 from news_api import get_news_factory
@@ -71,6 +72,17 @@ def show_portfolio_page():
     col1, col2, col3 = st.columns([2, 1, 1])
     with col1:
         st.title(f"📈 {st.session_state.username}'s Investor Center")
+    with col2:
+        if st.button("🔒 Log out all devices", type="secondary"):
+            # Revoke every session for this user, then clear local state.
+            revoke_user_sessions(st.session_state.user_id)
+            st.session_state.authenticated = False
+            st.session_state.user_id = None
+            st.session_state.username = None
+            st.session_state.session_token = None
+            st.session_state.current_page = 'landing'
+            st.success("Logged out of all devices.")
+            st.rerun()
     with col3:
         if st.button("🚪 Logout", type="secondary"):
             # Invalidate the session, then clear local state.
