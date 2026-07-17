@@ -1,0 +1,50 @@
+.metric-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  transition: box-shadow 0.18s ease;
+}
+
+.metric-card:hover {
+  box-shadow: var(--shadow-md);
+}
+
+.metric-card__icon {
+  font-size: 20px;
+  margin-bottom: 4px;
+  opacity: 0.7;
+}
+
+.metric-card__value {
+  font-family: var(--font-heading);
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--color-primary);
+  line-height: 1;
+}
+
+.metric-card__label {
+  font-size: 13px;
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.metric-card__trend {
+  font-size: 12px;
+  font-weight: 500;
+  margin-top: 4px;
+  color: var(--color-text-muted);
+}
+
+.metric-card__trend--up {
+  color: var(--color-success);
+}
+
+.metric-card__trend--down {
+  color: var(--color-error);
+}

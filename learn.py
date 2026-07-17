@@ -7,6 +7,7 @@ from database import (
     get_lesson_progress, update_lesson_progress,
     save_backtest_log, get_user_backtest_logs,
 )
+from ui_helpers import section_header_html, PRIMARY
 
 # Lesson registry — each entry is a dict: {id, title, subtitle, render}
 # To add a lesson: append to this list and write a render function below.
@@ -27,11 +28,10 @@ def show_learn_tab(user_id):
     """
     Display the lessons tab. user_id is the logged-in user's database id.
     """
-    st.header("Quantitative Trading — Strategy Lessons")
-    st.markdown(
-        "Each lesson teaches one strategy from first principles: "
-        "what it is, why it works mathematically, and how to code it."
-    )
+    st.html(section_header_html(
+        "Learn", "Strategy Lessons",
+        "Each lesson teaches one strategy from first principles: what it is, why it works mathematically, and how to code it."
+    ))
 
     if not LESSONS:
         st.warning("No lessons available yet.")
@@ -2196,7 +2196,7 @@ def _run_buy_and_hold_backtest(ticker, period, compare_sp500):
         x=equity.index,
         y=equity.values,
         name=ticker,
-        line=dict(color="cyan", width=2),
+        line=dict(color=PRIMARY, width=2.5),
     ))
 
     if compare_sp500:
@@ -2208,13 +2208,14 @@ def _run_buy_and_hold_backtest(ticker, period, compare_sp500):
                 x=sp_eq.index,
                 y=sp_eq.values,
                 name="S&P 500",
-                line=dict(color="orange", width=2, dash="dot"),
+                line=dict(color="#B8C4CC", width=2, dash="dot"),
             ))
 
     fig.update_layout(
         title=f"{ticker} Buy & Hold — Normalised Equity Curve (start = $1.00)",
-        template="plotly_dark",
+        template="plotly_white",
         height=420,
+        font_family="DM Sans, sans-serif",
         xaxis_title="Date",
         yaxis_title="Portfolio Value ($)",
         hovermode="x unified",
@@ -2229,13 +2230,14 @@ def _run_buy_and_hold_backtest(ticker, period, compare_sp500):
         y=drawdown.values * 100,
         name="Drawdown",
         fill="tozeroy",
-        line=dict(color="red", width=1),
-        fillcolor="rgba(255,50,50,0.25)",
+        line=dict(color="#EF4444", width=1),
+        fillcolor="rgba(239,68,68,0.15)",
     ))
     fig2.update_layout(
         title=f"{ticker} Drawdown from Peak (%)",
-        template="plotly_dark",
+        template="plotly_white",
         height=250,
+        font_family="DM Sans, sans-serif",
         xaxis_title="Date",
         yaxis_title="Drawdown (%)",
         showlegend=False,
