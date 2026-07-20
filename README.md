@@ -40,7 +40,7 @@ A web-based investment learning and portfolio-tracking platform built with Strea
 - **User-scoped data**: Portfolios, dashboards, progress, and conversations are isolated per user
 
 ### Financial Data
-- **Stooq integration**: Delayed stock data, no API key required
+- **iTick integration**: Delayed OHLCV bars and quotes from the iTick REST API
 - **Caching**: TTL caching to limit repeat requests
 - **Multiple time periods** for historical data
 
@@ -86,7 +86,7 @@ The SQLite database is created on first run, and the ten lessons are seeded auto
 - **pandas** (≥1.5.0) — data manipulation
 - **numpy** (≥1.24.0) — numerical computing
 - **plotly** (≥5.5.0) — interactive charting
-- **requests** (≥2.25.0) — HTTP client for Stooq
+- **requests** (≥2.25.0) — HTTP client for the iTick API
 - **argon2-cffi** (≥23.1.0) — Argon2id password hashing
 - **anthropic** (≥0.40.0) — AI tutor client
 - **python-dotenv** (≥1.0.0) — loads `ANTHROPIC_API_KEY` from `.env`
@@ -94,7 +94,7 @@ The SQLite database is created on first run, and the ten lessons are seeded auto
 - **streamlit-sortables** (≥0.2.0) — drag-and-drop dashboard components
 - **pytest** (≥7.0.0), **pytest-mock** (≥3.10.0) — testing
 
-Prices come from Stooq (delayed) and need no API key.
+Market data comes from iTick (delayed). A shared development token ships in `itick_data.py`, so the app runs out of the box; set `ITICK_API_KEY` to override it.
 
 ## Project Structure
 
@@ -116,9 +116,9 @@ comp4960-project-investors-center/
 ├── tutor.py                    # AI tutor tab
 ├── notifications.py            # Price thresholds and alert checking
 ├── news_api.py                 # News integration
-├── stooq_data.py               # Stooq market data
-├── itick_data.py               # Alternate market data source
-├── finance_data_improved.py    # Cached data access used by the app
+├── itick_data.py               # iTick market data client (the live source)
+├── stooq_data.py               # Superseded copy of the data client, unused
+├── finance_data_improved.py    # Cached wrapper the app actually calls
 │
 └── tests/
     ├── test_database.py            # Users, tickers, admin helpers
@@ -130,8 +130,8 @@ comp4960-project-investors-center/
     ├── test_dashboard.py           # Dashboard widget configuration
     ├── test_news.py                # News API handling
     ├── test_portfolio_charts.py    # Chart data preparation
-    ├── test_stooq_integration.py   # Stooq data retrieval
-    ├── test_itick_integration.py   # Alternate source retrieval
+    ├── test_itick_integration.py   # iTick data retrieval
+    ├── test_stooq_integration.py   # Retrieval tests for the superseded copy
     └── test_main.py                # Application wiring
 ```
 
@@ -189,6 +189,13 @@ echo "ANTHROPIC_API_KEY=your-key-here" > .env
 ```
 
 Without a key the tab loads and explains that it is unconfigured, rather than erroring.
+
+### Market Data (optional)
+Market data is fetched from the iTick REST API. `itick_data.py` falls back to a shared development token, so no setup is required to run the app. To use your own token:
+
+```bash
+echo "ITICK_API_KEY=your-token-here" >> .env
+```
 
 ### NewsAPI (optional)
 Set `NEWS_API_KEY` as an environment variable or in Streamlit secrets for live news. Without it the app serves mock news data.
