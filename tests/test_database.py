@@ -1,14 +1,50 @@
 #!/usr/bin/env python3
-"""Tests for database.py."""
+"""Tests for the core user, ticker, and admin helpers in database.py.
+
+Each test sets up its own isolated temp database, so the tests are order
+independent and never touch the real portfolio.db. Runnable directly:
+
+    PYTHONPATH=. python tests/test_database.py
+
+or via pytest.
+"""
 
 import os
 import sys
+import tempfile
+
+import database
 from database import (
     initialize_database, create_user, authenticate_user, get_user_by_username,
     add_user_ticker, remove_user_ticker, get_user_tickers, clear_user_tickers,
     hash_password, verify_password, get_all_users,
     validate_password_strength, validate_email,
 )
+
+# Keep the throwaway database out of the repo so a half-finished run never
+# leaves a stray file behind.
+TEST_DB = os.path.join(tempfile.gettempdir(), "jrg_test_database.db")
+
+
+def _setup():
+    """Point the database at an isolated temp file and start fresh."""
+    database.DATABASE_PATH = TEST_DB
+    if os.path.exists(TEST_DB):
+        os.remove(TEST_DB)
+    initialize_database()
+
+
+def _cleanup():
+    if os.path.exists(TEST_DB):
+        os.remove(TEST_DB)
+
+
+def _make_user(username="db_test_user"):
+    ok, _ = create_user(username, f"{username}@example.com", "secure_password_123")
+    assert ok, "Could not set up a test user"
+    user_id = authenticate_user(username, "secure_password_123")
+    assert user_id is not None, "Could not authenticate the test user"
+    return user_id
 
 
 def test_password_hashing():
@@ -36,85 +72,119 @@ def test_validators():
 
 def test_user_management():
     print("Testing user management...")
-    username = "test_user"
-    email = "test_user@example.com"
-    password = "secure_password_123"
+    _setup()
+    try:
+        username = "test_user"
+        email = "test_user@example.com"
+        password = "secure_password_123"
 
-    ok, _ = create_user(username, email, password)
-    assert ok, "User creation failed"
+        ok, _ = create_user(username, email, password)
+        assert ok, "User creation failed"
 
-    ok, _ = create_user(username, email, password)
-    assert not ok, "Duplicate user creation should fail"
+        ok, _ = create_user(username, email, password)
+        assert not ok, "Duplicate user creation should fail"
 
-    user_id = authenticate_user(username, password)
-    assert user_id is not None, "User authentication failed"
+        user_id = authenticate_user(username, password)
+        assert user_id is not None, "User authentication failed"
 
-    assert authenticate_user(username, "wrong_password") is None, \
-        "Wrong password should fail"
-    assert authenticate_user("nonexistent_user", password) is None, \
-        "Missing user should fail"
+        assert authenticate_user(username, "wrong_password") is None, \
+            "Wrong password should fail"
+        assert authenticate_user("nonexistent_user", password) is None, \
+            "Missing user should fail"
 
-    info = get_user_by_username(username)
-    assert info is not None and info["email"] == email, "User lookup failed"
+        info = get_user_by_username(username)
+        assert info is not None and info["email"] == email, "User lookup failed"
 
-    print("User management tests passed.")
-    return user_id
+        print("User management tests passed.")
+    finally:
+        _cleanup()
 
 
-def test_ticker_management(user_id):
+def test_ticker_management():
     print("Testing ticker management...")
-    tickers = ["AAPL", "GOOGL", "MSFT", "TSLA"]
+    _setup()
+    try:
+        user_id = _make_user()
+        tickers = ["AAPL", "GOOGL", "MSFT", "TSLA"]
 
-    for t in tickers:
-        assert add_user_ticker(user_id, t), f"Failed to add ticker {t}"
+        for t in tickers:
+            assert add_user_ticker(user_id, t), f"Failed to add ticker {t}"
 
-    assert not add_user_ticker(user_id, "AAPL"), "Duplicate ticker should not be added"
+        assert not add_user_ticker(user_id, "AAPL"), "Duplicate ticker should not be added"
 
-    fetched = get_user_tickers(user_id)
-    assert len(fetched) == len(tickers), "Ticker count mismatch"
+        fetched = get_user_tickers(user_id)
+        assert len(fetched) == len(tickers), "Ticker count mismatch"
 
-    assert remove_user_ticker(user_id, "GOOGL"), "Failed to remove ticker"
-    assert "GOOGL" not in get_user_tickers(user_id), "Ticker was not removed"
+        assert remove_user_ticker(user_id, "GOOGL"), "Failed to remove ticker"
+        assert "GOOGL" not in get_user_tickers(user_id), "Ticker was not removed"
 
-    assert not remove_user_ticker(user_id, "NONEXISTENT"), \
-        "Removing missing ticker should return False"
+        assert not remove_user_ticker(user_id, "NONEXISTENT"), \
+            "Removing missing ticker should return False"
 
-    assert clear_user_tickers(user_id), "Failed to clear tickers"
-    assert len(get_user_tickers(user_id)) == 0, "Tickers not cleared"
+        assert clear_user_tickers(user_id), "Failed to clear tickers"
+        assert len(get_user_tickers(user_id)) == 0, "Tickers not cleared"
 
-    print("Ticker management tests passed.")
+        print("Ticker management tests passed.")
+    finally:
+        _cleanup()
+
+
+def test_tickers_are_scoped_to_their_user():
+    """One user's portfolio must never surface in another's."""
+    print("Testing ticker isolation between users...")
+    _setup()
+    try:
+        first = _make_user("db_test_user_one")
+        second = _make_user("db_test_user_two")
+
+        add_user_ticker(first, "AAPL")
+        add_user_ticker(second, "TSLA")
+
+        assert get_user_tickers(first) == ["AAPL"], "first user sees the wrong tickers"
+        assert get_user_tickers(second) == ["TSLA"], "second user sees the wrong tickers"
+
+        clear_user_tickers(first)
+        assert get_user_tickers(second) == ["TSLA"], \
+            "clearing one user's tickers must not touch another's"
+
+        print("Ticker isolation tests passed.")
+    finally:
+        _cleanup()
 
 
 def test_admin_functions():
     print("Testing admin functions...")
-    users = get_all_users()
-    assert len(users) >= 1
-    u = users[0]
-    assert "user_id" in u and "username" in u
-    assert "password_hash" not in u
-    print("Admin function tests passed.")
+    _setup()
+    try:
+        _make_user()
 
+        users = get_all_users()
+        assert len(users) >= 1, "the created user should be listed"
+        u = users[0]
+        assert "user_id" in u and "username" in u
+        assert "password_hash" not in u, "admin listing must not expose password hashes"
 
-def cleanup_test_data():
-    if os.path.exists("portfolio.db"):
-        os.remove("portfolio.db")
+        print("Admin function tests passed.")
+    finally:
+        _cleanup()
 
 
 def main():
     print("Starting database functionality tests...\n")
+    tests = [
+        test_password_hashing,
+        test_validators,
+        test_user_management,
+        test_ticker_management,
+        test_tickers_are_scoped_to_their_user,
+        test_admin_functions,
+    ]
     try:
-        initialize_database()
-        test_password_hashing()
-        test_validators()
-        user_id = test_user_management()
-        test_ticker_management(user_id)
-        test_admin_functions()
+        for test in tests:
+            test()
         print("\nAll database tests passed.")
     except AssertionError as e:
         print(f"\nTest failed: {e}")
-        sys.exit(1)
-    except Exception as e:
-        print(f"\nUnexpected error: {e}")
         sys.exit(1)
 
 

@@ -916,7 +916,7 @@ def get_user_backtest_logs(user_id):
                        total_return, cagr, max_drawdown, sharpe, n_trades, ran_at
                 FROM backtest_logs
                 WHERE user_id = ?
-                ORDER BY ran_at DESC
+                ORDER BY ran_at DESC, id DESC
             ''', (user_id,))
             return [dict(row) for row in cursor.fetchall()]
     except sqlite3.Error:
@@ -1004,7 +1004,7 @@ def get_user_conversations(user_id: int) -> List[dict]:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT * FROM ai_conversations WHERE user_id = ? "
-                "ORDER BY updated_at DESC",
+                "ORDER BY updated_at DESC, id DESC",
                 (user_id,),
             )
             return [dict(row) for row in cursor.fetchall()]

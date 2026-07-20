@@ -1,50 +1,54 @@
 # Investor Center
 
-A comprehensive web-based investment portfolio management and analysis platform built with Streamlit. This application provides real-time financial data, customizable dashboards, news integration, and intelligent notifications for investors to track and manage their portfolios effectively.
+A web-based investment learning and portfolio-tracking platform built with Streamlit. It combines delayed market data, a customizable dashboard, financial news, price alerts, a ten-lesson trading-strategy curriculum with backtesting, and an AI tutor.
 
 ## Features
 
 ### Portfolio Management
-- **Real-time Stock Tracking**: Monitor multiple stocks with live price updates
-- **Historical Data Analysis**: View detailed historical performance charts
-- **Portfolio Visualization**: Interactive charts and graphs using Plotly
-- **Ticker Management**: Easy add/remove functionality for portfolio stocks
+- **Stock tracking**: Monitor multiple tickers with delayed price data
+- **Historical analysis**: Interactive performance charts via Plotly
+- **Ticker management**: Add and remove tickers per user
 
 ### Customizable Dashboard
-- **Widget-based Interface**: Drag-and-drop dashboard customization
-- **Grid Layout System**: Organize widgets in a flexible grid layout
-- **Persistent Configuration**: Save dashboard layouts per user
-- **Multiple Widget Types**: Various financial data visualization widgets
+- **Widget-based interface**: Configurable dashboard widgets
+- **Grid layout**: Arrange widgets by row and column
+- **Persistent configuration**: Layouts saved per user in the database
+
+### Learn Tab
+- **Ten strategy lessons**: Buy and hold, moving-average and EMA crossovers, momentum, RSI, Bollinger bands, mean reversion, VWAP, TWAP, and macro regime detection
+- **Progress tracking**: Per-user lesson status (`not_started`, `in_progress`, `completed`), persisted across sessions
+- **Backtest log**: Saved backtest runs with return, CAGR, max drawdown, Sharpe, and trade count
+
+### AI Tutor
+- **Lesson-aware chat**: Ask questions about the lesson material
+- **Persisted conversations**: Threads and messages stored per user
+- **Graceful degradation**: Shows a friendly message when no API key is configured
 
 ### News Integration
-- **Financial News Feed**: Stay updated with general financial market news
-- **Portfolio-specific News**: Get news relevant to your tracked stocks
-- **NewsAPI Integration**: Real-time news updates with fallback to mock data
-- **Cached Performance**: Optimized news loading with intelligent caching
+- **Financial news feed** and **portfolio-specific news**
+- **NewsAPI integration** with fallback to mock data when no key is set
 
 ### Smart Notifications
-- **Price Threshold Alerts**: Set custom price alerts for your stocks
-- **Automatic Monitoring**: Background threshold checking
-- **Trigger Management**: Enable/disable and reset notification triggers
-- **Session-based Alerts**: Real-time notifications during active sessions
+- **Price threshold alerts**: Above and below thresholds per ticker
+- **Automatic monitoring**: Thresholds checked during an active session
+- **Trigger management**: Enable, disable, and reset triggers
 
 ### User Authentication
-- **Secure Registration**: User account creation with password hashing
-- **Login System**: Secure authentication with session management
-- **User-specific Data**: Personalized portfolios and dashboard configurations
+- **Argon2id password hashing** with per-user salting
+- **Account lockout** after repeated failed attempts
+- **Server-side sessions**: Database-backed tokens with a 24-hour TTL, expiry purging, single-session logout, and "log out all devices" revocation
+- **User-scoped data**: Portfolios, dashboards, progress, and conversations are isolated per user
 
 ### Financial Data
-- **Stooq Integration**: Delayed stock data via Stooq (no API key required)
-- **Comprehensive Stock Info**: Current price, 52-week highs/lows, historical data
-- **Performance Caching**: Optimized data retrieval with TTL caching
-- **Multiple Time Periods**: Historical data with various time ranges
-- **Reliable Deployment**: Works on Render without API key dependencies
+- **Stooq integration**: Delayed stock data, no API key required
+- **Caching**: TTL caching to limit repeat requests
+- **Multiple time periods** for historical data
 
-## 🛠️ Installation
+## Installation
 
 ### Prerequisites
 - Python 3.8 or higher
-- pip package manager
+- pip
 
 ### Quick Start
 
@@ -54,140 +58,155 @@ A comprehensive web-based investment portfolio management and analysis platform 
    cd comp4960-project-investors-center
    ```
 
-2. **Install dependencies**
+2. **Create a virtual environment and install dependencies**
    ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate        # Windows: .venv\Scripts\activate
    pip install -r requirements.txt
    ```
 
 3. **Run the application**
    ```bash
-   # Using the provided script (recommended)
+   # Using the provided script
    ./run.sh
-   
+
    # Or directly with Streamlit
    streamlit run main.py
    ```
 
 4. **Access the application**
-   - Open your web browser
-   - Navigate to `http://localhost:8501`
-   - Create an account or log in to start using the platform
+   - Open `http://localhost:8501`
+   - Register an account, then log in
+
+The SQLite database is created on first run, and the ten lessons are seeded automatically at startup, so no manual setup step is needed.
 
 ## Dependencies
 
-The application relies on the following key packages:
+- **streamlit** (≥1.28.0) — web application framework
+- **pandas** (≥1.5.0) — data manipulation
+- **numpy** (≥1.24.0) — numerical computing
+- **plotly** (≥5.5.0) — interactive charting
+- **requests** (≥2.25.0) — HTTP client for Stooq
+- **argon2-cffi** (≥23.1.0) — Argon2id password hashing
+- **anthropic** (≥0.40.0) — AI tutor client
+- **python-dotenv** (≥1.0.0) — loads `ANTHROPIC_API_KEY` from `.env`
+- **newsapi-python** (≥0.2.6) — news integration
+- **streamlit-sortables** (≥0.2.0) — drag-and-drop dashboard components
+- **pytest** (≥7.0.0), **pytest-mock** (≥3.10.0) — testing
 
-- **streamlit** (≥1.28.0) - Web application framework
-- **requests** (≥2.25.0) - HTTP library for Stooq data retrieval
-- **pandas** (≥1.5.0) - Data manipulation and analysis
-- **plotly** (≥5.5.0) - Interactive charting and visualization
-- **newsapi-python** (≥0.2.6) - News API integration
-- **streamlit-sortables** (≥0.2.0) - Drag-and-drop UI components
-- **pytest** (≥7.0.0) - Testing framework
-- **numpy** (≥1.24.0) - Numerical computing
-
-**Note**: Uses Stooq (delayed) for prices; no API key required.
+Prices come from Stooq (delayed) and need no API key.
 
 ## Project Structure
 
 ```
 comp4960-project-investors-center/
-├── main.py                     # Main application entry point
-├── run.sh                      # Application startup script
+├── main.py                     # Streamlit entry point, auth flow, tab layout
+├── run.sh                      # Startup script
 ├── requirements.txt            # Python dependencies
-├── portfolio.db               # SQLite database (created on first run)
+├── pytest.ini                  # Test configuration
+├── portfolio.db                # SQLite database (created on first run)
 │
-├── Core Modules:
-├── dashboard.py               # Dashboard management and widget system
-├── dashboard_widgets.py       # Dashboard widget implementations
-├── database.py               # Database operations and schema
-├── finance_data.py           # Financial data retrieval (Stooq-based)
-├── finance_data_improved.py   # Enhanced financial data with caching
-├── stooq_data.py             # Stooq API integration (no API key required)
-├── news_api.py               # News API integration and management
-├── notifications.py          # Notification system and threshold monitoring
+├── Core modules:
+├── database.py                 # Schema, auth, sessions, and all data access
+├── seed_lessons.py             # Idempotent lesson seeding (runs at startup)
+├── dashboard.py                # Dashboard page and widget management
+├── dashboard_widgets.py        # Widget implementations
+├── learn.py                    # Learn tab: lessons, strategies, backtesting
+├── Backtesting_log_page.py     # Backtest log tab
+├── tutor.py                    # AI tutor tab
+├── notifications.py            # Price thresholds and alert checking
+├── news_api.py                 # News integration
+├── stooq_data.py               # Stooq market data
+├── itick_data.py               # Alternate market data source
+├── finance_data_improved.py    # Cached data access used by the app
 │
-└── Tests:
-    ├── test_main.py              # Main application tests
-    ├── test_dashboard.py         # Dashboard functionality tests
-    ├── test_database.py          # Database operations tests
-    ├── test_news.py              # News API tests
-    ├── test_notifications.py     # Notification system tests
-    ├── test_auth_integration.py  # Authentication integration tests
-    └── test_portfolio_charts.py  # Portfolio visualization tests
+└── tests/
+    ├── test_database.py            # Users, tickers, admin helpers
+    ├── test_jrg_schema.py          # Domain tables: constraints and cascades
+    ├── test_sessions.py            # Session lifecycle, expiry, revocation
+    ├── test_seed_lessons.py        # Lesson seeding and progress foreign key
+    ├── test_auth_integration.py    # Registration, login, lockout
+    ├── test_notifications.py       # Thresholds and alert triggering
+    ├── test_dashboard.py           # Dashboard widget configuration
+    ├── test_news.py                # News API handling
+    ├── test_portfolio_charts.py    # Chart data preparation
+    ├── test_stooq_integration.py   # Stooq data retrieval
+    ├── test_itick_integration.py   # Alternate source retrieval
+    └── test_main.py                # Application wiring
 ```
+
+## Database Schema
+
+SQLite, created by `initialize_database()` in `database.py`. Foreign keys are enforced on every connection, and user deletion cascades through all dependent tables.
+
+| Table | Purpose |
+| --- | --- |
+| `users` | Accounts, Argon2id hashes, failed-attempt and lockout state |
+| `sessions` | Server-side session tokens with expiry |
+| `user_tickers` | Tracked tickers per user |
+| `user_dashboard_widgets` | Saved dashboard layout per user |
+| `user_notification_thresholds` | Price alert rules |
+| `lessons` | The ten Learn-tab lessons (seeded) |
+| `user_lesson_progress` | Per-user lesson status, one row per user and lesson |
+| `backtest_logs` | Saved backtest runs |
+| `ai_conversations` / `ai_messages` | Tutor conversation threads and messages |
+| `portfolio_holdings` / `transactions` | Practice-portfolio schema, defined for future use |
 
 ## Usage
 
-### Getting Started
-1. **Register/Login**: Create a new account or log in with existing credentials
-2. **Add Stocks**: Navigate to the Portfolio page and add stock tickers to track
-3. **Customize Dashboard**: Use the Dashboard page to add and arrange widgets
-4. **Set Alerts**: Configure price threshold notifications for your stocks
-5. **Stay Informed**: Check the News tab for relevant financial updates
-
-### Key Pages
-- **Portfolio**: Manage your stock portfolio and view basic information
-- **Charts**: Analyze historical performance with interactive charts
-- **News**: Read financial news relevant to your portfolio
-- **Notifications**: Set up and manage price alerts
-- **Dashboard**: Customize your personal investment dashboard
-
-### Tips for Best Experience
-- Use the caching system efficiently by avoiding excessive page refreshes
-- Set up NewsAPI key for real-time news (optional - falls back to mock data)
-- Regularly check notifications for important price movements
-- Customize your dashboard layout to focus on most important metrics
+1. **Register or log in**
+2. **Add tickers** on the Portfolio tab
+3. **Customize the dashboard** by adding and arranging widgets
+4. **Work through lessons** on the Learn tab and run backtests
+5. **Ask the tutor** questions about the lesson material
+6. **Set price alerts** on the Notifications tab
 
 ## Testing
 
-Run the comprehensive test suite:
-
 ```bash
-# Run all tests
+# Run the whole suite from the project root
 pytest
 
-# Run specific test files
-pytest test_main.py
-pytest test_database.py
-pytest test_notifications.py
+# Run a single file
+pytest tests/test_database.py
 
-# Run with verbose output
+# Verbose
 pytest -v
 
-# Run with coverage report
-pytest --cov=.
+# Any test file can also be run on its own
+python tests/test_sessions.py
 ```
+
+Database tests run against isolated temporary databases and never touch `portfolio.db`. Notification tests stub out price lookups, so the suite needs no network access.
 
 ## Configuration
 
-### NewsAPI Setup (Optional)
-To enable real-time news features:
-1. Get a free API key from [NewsAPI](https://newsapi.org/)
-2. Set the API key in your environment or modify the news_api.py configuration
-3. Without an API key, the application will use mock news data
+### AI Tutor (optional)
+Set `ANTHROPIC_API_KEY` to enable the Tutor tab:
 
-### Database Configuration
-- The application uses SQLite by default
-- Database file (`portfolio.db`) is created automatically on first run
-- All user data, portfolios, and configurations are stored locally
+```bash
+echo "ANTHROPIC_API_KEY=your-key-here" > .env
+```
 
+Without a key the tab loads and explains that it is unconfigured, rather than erroring.
 
-### Development Guidelines
-- Follow PEP 8 style guidelines
-- Add comprehensive tests for new features
-- Update documentation for any API changes
-- Use type hints where appropriate
-- Ensure backward compatibility
+### NewsAPI (optional)
+Set `NEWS_API_KEY` as an environment variable or in Streamlit secrets for live news. Without it the app serves mock news data.
 
+### Database
+SQLite by default. `portfolio.db` is created automatically on first run and is gitignored, so each developer has their own local copy.
+
+## Development Guidelines
+
+- Follow PEP 8
+- Add tests for new features, using an isolated temp database rather than `portfolio.db`
+- Keep documentation in step with schema changes
+- Use type hints where practical
 
 ## Future Enhancements
 
-Potential areas for expansion:
-- Real-time WebSocket data feeds
-- Advanced technical analysis indicators
-- Portfolio performance analytics
-- Mobile-responsive design improvements
-- Integration with additional data sources
-- Advanced charting capabilities
+- Wire the practice-portfolio tables (`portfolio_holdings`, `transactions`) to a trading UI
+- Deliver the session token as an httpOnly cookie once the React front end lands
+- Real-time data feeds
+- Additional technical indicators
 - Export functionality for reports
