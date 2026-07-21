@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, InvalidHashError, VerificationError
 
-
 DATABASE_PATH = "portfolio.db"
 
 _password_hasher = PasswordHasher(
@@ -104,7 +103,7 @@ def initialize_database():
                 FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE
             )
         ''')
-        
+
         # Lessons catalogue
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS lessons (
@@ -211,7 +210,8 @@ def initialize_database():
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_transactions_user           ON transactions         (user_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_transactions_ticker         ON transactions         (ticker)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_ai_conversations_user       ON ai_conversations     (user_id)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_ai_messages_conversation    ON ai_messages          (conversation_id)')
+        cursor.execute(
+            'CREATE INDEX IF NOT EXISTS idx_ai_messages_conversation    ON ai_messages          (conversation_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_backtest_logs_user          ON backtest_logs        (user_id)')
 
         # Server-side sessions (opaque token, expiry lives in the row).
@@ -227,6 +227,27 @@ def initialize_database():
         ''')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_sessions_user             ON sessions             (user_id)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_sessions_expires          ON sessions             (expires_at)')
+
+        # Adaptive-quiz concept tracking. One row per (user, concept). This is
+        # what powers the review quiz: every graded quiz answer updates the
+        # concept's miss count and correct-streak here, so the review quiz can
+        # bias toward a user's weakest concepts and retire ones they've mastered.
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS quiz_concept_stats (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id        INTEGER NOT NULL,
+                concept        TEXT    NOT NULL,
+                lesson_id      INTEGER,
+                times_seen     INTEGER NOT NULL DEFAULT 0,
+                times_missed   INTEGER NOT NULL DEFAULT 0,
+                correct_streak INTEGER NOT NULL DEFAULT 0,
+                retired        INTEGER NOT NULL DEFAULT 0,
+                updated_at     TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (user_id) ON DELETE CASCADE,
+                UNIQUE (user_id, concept)
+            )
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_quiz_concept_user          ON quiz_concept_stats   (user_id)')
 
         conn.commit()
 
@@ -344,7 +365,7 @@ def authenticate_user(username: str, password: str) -> Optional[int]:
             new_count = row["failed_login_count"] + 1
             if new_count >= MAX_FAILED_ATTEMPTS:
                 locked_until = (
-                    datetime.utcnow() + timedelta(minutes=LOCKOUT_MINUTES)
+                        datetime.utcnow() + timedelta(minutes=LOCKOUT_MINUTES)
                 ).isoformat()
                 cursor.execute(
                     "UPDATE users SET failed_login_count = ?, locked_until = ? "
@@ -401,7 +422,7 @@ def add_user_ticker(user_id: int, ticker: str) -> bool:
             )
             conn.commit()
             return True
-            
+
     except sqlite3.IntegrityError:
         # Ticker already exists for this user
         return False
@@ -421,7 +442,7 @@ def remove_user_ticker(user_id: int, ticker: str) -> bool:
             )
             conn.commit()
             return cursor.rowcount > 0
-            
+
     except sqlite3.Error:
         return False
 
@@ -437,7 +458,7 @@ def get_user_tickers(user_id: int) -> List[str]:
             )
             results = cursor.fetchall()
             return [row['ticker'] for row in results]
-            
+
     except sqlite3.Error:
         return []
 
@@ -453,7 +474,7 @@ def clear_user_tickers(user_id: int) -> bool:
             )
             conn.commit()
             return True
-            
+
     except sqlite3.Error:
         return False
 
@@ -475,14 +496,14 @@ def get_all_users() -> List[dict]:
                 }
                 for row in results
             ]
-            
+
     except sqlite3.Error:
         return []
 
 
-def save_user_widget_config(user_id: int, widget_id: str, widget_type: str, 
-                           widget_config: str = None, position_row: int = 0, 
-                           position_col: int = 0, is_visible: bool = True) -> bool:
+def save_user_widget_config(user_id: int, widget_id: str, widget_type: str,
+                            widget_config: str = None, position_row: int = 0,
+                            position_col: int = 0, is_visible: bool = True) -> bool:
     """
     Save or update a user's widget configuration.
     Returns True if successful, False otherwise.
@@ -497,7 +518,7 @@ def save_user_widget_config(user_id: int, widget_id: str, widget_type: str,
             ''', (user_id, widget_id, widget_type, widget_config, position_row, position_col, is_visible))
             conn.commit()
             return True
-            
+
     except sqlite3.Error:
         return False
 
@@ -514,7 +535,7 @@ def get_user_widget_configs(user_id: int) -> List[dict]:
                 ORDER BY position_row, position_col
             ''', (user_id,))
             results = cursor.fetchall()
-            
+
             return [
                 {
                     'widget_id': row['widget_id'],
@@ -528,7 +549,7 @@ def get_user_widget_configs(user_id: int) -> List[dict]:
                 }
                 for row in results
             ]
-            
+
     except sqlite3.Error:
         return []
 
@@ -547,7 +568,7 @@ def delete_user_widget_config(user_id: int, widget_id: str) -> bool:
             )
             conn.commit()
             return cursor.rowcount > 0
-            
+
     except sqlite3.Error:
         return False
 
@@ -563,7 +584,7 @@ def clear_user_widget_configs(user_id: int) -> bool:
             )
             conn.commit()
             return True
-            
+
     except sqlite3.Error:
         return False
 
@@ -583,7 +604,7 @@ def update_widget_visibility(user_id: int, widget_id: str, is_visible: bool) -> 
             ''', (is_visible, user_id, widget_id))
             conn.commit()
             return cursor.rowcount > 0
-            
+
     except sqlite3.Error:
         return False
 
@@ -603,7 +624,7 @@ def update_widget_position(user_id: int, widget_id: str, position_row: int, posi
             ''', (position_row, position_col, user_id, widget_id))
             conn.commit()
             return cursor.rowcount > 0
-            
+
     except sqlite3.Error:
         return False
 
@@ -639,21 +660,21 @@ def create_default_dashboard_widgets(user_id: int) -> bool:
             'is_visible': True
         }
     ]
-    
+
     try:
         for widget in default_widgets:
             if not save_user_widget_config(
-                user_id=user_id,
-                widget_id=widget['widget_id'],
-                widget_type=widget['widget_type'],
-                widget_config=widget['widget_config'],
-                position_row=widget['position_row'],
-                position_col=widget['position_col'],
-                is_visible=widget['is_visible']
+                    user_id=user_id,
+                    widget_id=widget['widget_id'],
+                    widget_type=widget['widget_type'],
+                    widget_config=widget['widget_config'],
+                    position_row=widget['position_row'],
+                    position_col=widget['position_col'],
+                    is_visible=widget['is_visible']
             ):
                 return False
         return True
-        
+
     except Exception:
         return False
 
@@ -665,10 +686,10 @@ def add_notification_threshold(user_id: int, ticker: str, threshold_type: str, t
     """
     if threshold_type not in ['above', 'below']:
         return False
-    
+
     if threshold_price <= 0:
         return False
-    
+
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
@@ -679,7 +700,7 @@ def add_notification_threshold(user_id: int, ticker: str, threshold_type: str, t
             ''', (user_id, ticker.upper(), threshold_type, threshold_price))
             conn.commit()
             return True
-            
+
     except sqlite3.Error:
         return False
 
@@ -696,10 +717,10 @@ def get_user_notification_thresholds(user_id: int) -> List[dict]:
                 WHERE user_id = ?
                 ORDER BY created_at DESC
             ''', (user_id,))
-            
+
             results = cursor.fetchall()
             return [dict(row) for row in results]
-            
+
     except sqlite3.Error:
         return []
 
@@ -715,10 +736,10 @@ def get_active_notification_thresholds(user_id: int) -> List[dict]:
                 WHERE user_id = ? AND is_active = 1
                 ORDER BY ticker, threshold_type
             ''', (user_id,))
-            
+
             results = cursor.fetchall()
             return [dict(row) for row in results]
-            
+
     except sqlite3.Error:
         return []
 
@@ -738,7 +759,7 @@ def update_notification_threshold_status(threshold_id: int, is_active: bool) -> 
             ''', (is_active, threshold_id))
             conn.commit()
             return cursor.rowcount > 0
-            
+
     except sqlite3.Error:
         return False
 
@@ -758,7 +779,7 @@ def mark_threshold_triggered(threshold_id: int) -> bool:
             ''', (threshold_id,))
             conn.commit()
             return cursor.rowcount > 0
-            
+
     except sqlite3.Error:
         return False
 
@@ -778,7 +799,7 @@ def reset_threshold_trigger(threshold_id: int) -> bool:
             ''', (threshold_id,))
             conn.commit()
             return cursor.rowcount > 0
-            
+
     except sqlite3.Error:
         return False
 
@@ -797,7 +818,7 @@ def delete_notification_threshold(threshold_id: int) -> bool:
             )
             conn.commit()
             return cursor.rowcount > 0
-            
+
     except sqlite3.Error:
         return False
 
@@ -810,15 +831,15 @@ def validate_threshold_input(ticker: str, threshold_type: str, threshold_price: 
     # Validate ticker
     if not ticker or not ticker.strip():
         return False, "Ticker symbol is required"
-    
+
     ticker = ticker.strip().upper()
     if len(ticker) > 10:
         return False, "Ticker symbol must be 10 characters or less"
-    
+
     # Validate threshold type
     if threshold_type not in ['above', 'below']:
         return False, "Threshold type must be 'above' or 'below'"
-    
+
     # Validate threshold price
     try:
         price = float(threshold_price)
@@ -828,7 +849,7 @@ def validate_threshold_input(ticker: str, threshold_type: str, threshold_price: 
             return False, "Threshold price must be less than $1,000,000"
     except (ValueError, TypeError):
         return False, "Threshold price must be a valid number"
-    
+
     return True, ""
 
 
@@ -1105,8 +1126,121 @@ def revoke_user_sessions(user_id: int) -> int:
         return 0
 
 
+# ---------------------------------------------------------------------------
+# Adaptive-quiz concept tracking
+#
+# These three helpers are the engine behind the review quiz. record_quiz_result
+# is called once per graded question; get_weak_concepts feeds the review-quiz
+# generator; get_quiz_concept_stats backs the "your weak spots" display and the
+# tests. A concept is "retired" (considered mastered) after two correct answers
+# in a row, and un-retired the moment it's missed again.
+# ---------------------------------------------------------------------------
+
+RETIRE_AFTER_CORRECT_STREAK = 2
+
+
+def record_quiz_result(user_id, concept, is_correct, lesson_id=None):
+    """
+    Record one graded quiz answer against a concept for a user.
+
+    Updates the per-concept miss count and correct-streak. A correct answer that
+    brings the streak to RETIRE_AFTER_CORRECT_STREAK retires the concept; any
+    miss resets the streak and un-retires it. No-ops (safely) if the user isn't
+    logged in or the concept is blank.
+    """
+    if not user_id or not concept or not str(concept).strip():
+        return
+    concept = str(concept).strip()
+    now = datetime.now().strftime(_SESSION_TS_FORMAT)
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            row = cursor.execute(
+                "SELECT times_seen, times_missed, correct_streak, retired "
+                "FROM quiz_concept_stats WHERE user_id = ? AND concept = ?",
+                (user_id, concept),
+            ).fetchone()
+
+            if row is None:
+                times_seen, times_missed, streak, retired = 0, 0, 0, 0
+            else:
+                times_seen = row["times_seen"]
+                times_missed = row["times_missed"]
+                streak = row["correct_streak"]
+                retired = row["retired"]
+
+            times_seen += 1
+            if is_correct:
+                streak += 1
+                if streak >= RETIRE_AFTER_CORRECT_STREAK:
+                    retired = 1
+            else:
+                times_missed += 1
+                streak = 0
+                retired = 0
+
+            if row is None:
+                cursor.execute(
+                    "INSERT INTO quiz_concept_stats "
+                    "(user_id, concept, lesson_id, times_seen, times_missed, correct_streak, retired, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (user_id, concept, lesson_id, times_seen, times_missed, streak, retired, now),
+                )
+            else:
+                cursor.execute(
+                    "UPDATE quiz_concept_stats SET "
+                    "lesson_id = COALESCE(?, lesson_id), times_seen = ?, times_missed = ?, "
+                    "correct_streak = ?, retired = ?, updated_at = ? "
+                    "WHERE user_id = ? AND concept = ?",
+                    (lesson_id, times_seen, times_missed, streak, retired, now, user_id, concept),
+                )
+            conn.commit()
+    except sqlite3.Error:
+        # Recording is best-effort; a failure here must never break the quiz UI.
+        pass
+
+
+def get_weak_concepts(user_id, limit=5):
+    """
+    Return a user's weakest, non-retired concepts (those they've missed at least
+    once and not yet mastered), worst first. Each entry is a dict with concept,
+    lesson_id, times_seen, times_missed, and correct_streak. Ordered by misses
+    (desc), then current streak (asc), then most-recently-seen.
+    """
+    if not user_id:
+        return []
+    try:
+        with get_db_connection() as conn:
+            rows = conn.execute(
+                "SELECT concept, lesson_id, times_seen, times_missed, correct_streak "
+                "FROM quiz_concept_stats "
+                "WHERE user_id = ? AND retired = 0 AND times_missed > 0 "
+                "ORDER BY times_missed DESC, correct_streak ASC, updated_at DESC "
+                "LIMIT ?",
+                (user_id, limit),
+            ).fetchall()
+            return [dict(r) for r in rows]
+    except sqlite3.Error:
+        return []
+
+
+def get_quiz_concept_stats(user_id):
+    """Return every concept-stat row for a user (all concepts), ordered by name."""
+    if not user_id:
+        return []
+    try:
+        with get_db_connection() as conn:
+            rows = conn.execute(
+                "SELECT concept, lesson_id, times_seen, times_missed, correct_streak, retired "
+                "FROM quiz_concept_stats WHERE user_id = ? ORDER BY concept",
+                (user_id,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+    except sqlite3.Error:
+        return []
+
+
 # Initialize database when module is imported
 if __name__ == "__main__":
     initialize_database()
     print("Database initialized successfully!")
-

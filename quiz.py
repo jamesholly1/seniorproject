@@ -27,7 +27,7 @@ import streamlit as st
 # quiz and the chat tutor always stay in sync. The hint/explanation helpers are
 # what fuse the quiz and the chat into one diagnose-and-explain loop.
 from tutor import (
-    MODEL, LESSON_CONTEXT, _get_client,
+    MODEL, LESSON_CONTEXT, LESSON_TITLES, _get_client,
     generate_hint, generate_explanation, build_missed_question_seed,
 )
 
@@ -47,6 +47,7 @@ FALLBACK_QUIZZES = {
     1: [
         {
             "question": "In one sentence, what is the buy-and-hold strategy?",
+            "concept": "Buy and hold",
             "options": [
                 "Buy an asset once and hold it until the end of your time horizon.",
                 "Trade in and out of stocks based on daily price signals.",
@@ -61,6 +62,7 @@ FALLBACK_QUIZZES = {
         },
         {
             "question": "What does CAGR measure?",
+            "concept": "CAGR",
             "options": [
                 "The single worst day the stock had.",
                 "The annualized compound growth rate over the holding period.",
@@ -75,6 +77,7 @@ FALLBACK_QUIZZES = {
         },
         {
             "question": "Why is max drawdown considered 'the real cost' of buy and hold?",
+            "concept": "Max drawdown",
             "options": [
                 "It is a tax you pay every year.",
                 "It is the broker commission on each trade.",
@@ -123,7 +126,10 @@ def _build_quiz_prompt(lesson_id):
         "- Questions test conceptual understanding, NOT personalized advice. Never ask "
         "what someone 'should buy/sell' or predict prices.\n"
         "- Keep wording clear and beginner-friendly.\n"
-        "- Write a one-sentence explanation for why the correct answer is right.\n\n"
+        "- Write a one-sentence explanation for why the correct answer is right.\n"
+        "- Tag each question with a short 'concept' (2-4 words) naming the single "
+        "idea it tests (e.g. \"CAGR\", \"max drawdown\", \"moving average crossover\"). "
+        "Reuse the same wording for the same idea so concepts can be tracked.\n\n"
         f"{source}\n\n"
         "Return ONLY a JSON object — no markdown, no backticks, no text before or after. "
         "Use exactly this shape:\n"
@@ -133,7 +139,8 @@ def _build_quiz_prompt(lesson_id):
         '      "question": "string",\n'
         '      "options": ["string", "string", "string", "string"],\n'
         '      "correct_index": 0,\n'
-        '      "explanation": "string"\n'
+        '      "explanation": "string",\n'
+        '      "concept": "string"\n'
         '    }\n'
         '  ]\n'
         '}'
@@ -182,6 +189,7 @@ def _parse_quiz_json(raw_text):
         options = q.get("options")
         idx = q.get("correct_index")
         explanation = q.get("explanation", "")
+        concept = q.get("concept", "")
         # Validate each field defensively.
         if not isinstance(text_q, str) or not text_q.strip():
             return None
@@ -196,6 +204,7 @@ def _parse_quiz_json(raw_text):
             "options": [o.strip() for o in options],
             "correct_index": idx,
             "explanation": (explanation or "").strip(),
+            "concept": (concept or "General").strip() or "General",
         })
 
     return cleaned or None
@@ -281,29 +290,134 @@ def generate_quiz(lesson_id):
     return None, None
 
 
+def _build_review_prompt(weak_concepts):
+    """
+    Build a prompt that asks Claude for questions targeting the user's weak
+    concepts. `weak_concepts` is a list of concept-stat dicts (worst first);
+    we pass their labels so the review is grounded in what the learner keeps
+    missing, and reuse any lesson content we have for extra grounding.
+    """
+    labels = [c["concept"] for c in weak_concepts]
+    concept_list = ", ".join(f'"{c}"' for c in labels)
+
+    # Ground on whatever lesson content we have available (best-effort).
+    grounding = "\n\n".join(
+        text for text in (LESSON_CONTEXT.get(k, "") for k in sorted(LESSON_CONTEXT)) if text
+    )
+    grounding_block = (
+        "Where relevant, ground the questions in this lesson material:\n\n" + grounding
+        if grounding else ""
+    )
+
+    return (
+        "You are the quiz writer for JRG Financial Solutions. The learner has been "
+        "getting these concepts wrong and needs targeted review:\n"
+        f"{concept_list}\n\n"
+        f"Write exactly {NUM_QUESTIONS} multiple-choice questions that focus on those "
+        "weak concepts (weight toward the earlier ones, which are the weakest). Rules:\n"
+        "- Each question has exactly 4 options, exactly one correct.\n"
+        "- Test conceptual understanding, never 'what should I buy/sell' or price predictions.\n"
+        "- Tag each question's 'concept' with the exact weak-concept label it targets, "
+        "chosen from the list above, so mastery can be tracked.\n"
+        "- Give a one-sentence explanation for the correct answer.\n\n"
+        f"{grounding_block}\n\n"
+        "Return ONLY a JSON object — no markdown or backticks — of this shape:\n"
+        '{ "questions": [ { "question": "string", "options": ["string","string","string","string"], '
+        '"correct_index": 0, "explanation": "string", "concept": "string" } ] }'
+    )
+
+
+def _review_fallback(weak_concepts):
+    """
+    Offline fallback for the review quiz: pull hand-written questions whose
+    concept matches one of the user's weak concepts. Keeps the review usable
+    with no API key (e.g. during a live demo). Returns a question list or None.
+    """
+    weak_labels = {c["concept"].lower() for c in weak_concepts}
+    pool = []
+    for questions in FALLBACK_QUIZZES.values():
+        for q in questions:
+            if (q.get("concept", "").lower() in weak_labels) and q not in pool:
+                pool.append(q)
+    return pool[:NUM_QUESTIONS] or None
+
+
+def generate_review_quiz(user_id):
+    """
+    Generate a review quiz weighted toward a user's weakest concepts.
+
+    Returns (questions, source, weak_concepts). If the user has no tracked weak
+    concepts yet, returns (None, None, []). Tries Claude first (grounded in the
+    weak-concept labels), then falls back to matching hand-written questions.
+    """
+    from database import get_weak_concepts
+
+    weak = get_weak_concepts(user_id, limit=5)
+    if not weak:
+        return None, None, []
+
+    client = _get_client()
+    if client is not None and client != "no_library":
+        try:
+            response = client.messages.create(
+                model=MODEL,
+                max_tokens=1200,
+                messages=[{"role": "user", "content": _build_review_prompt(weak)}],
+            )
+            questions = _parse_quiz_json(response.content[0].text)
+            if questions:
+                return questions, "ai", weak
+        except Exception:
+            pass
+
+    fallback = _review_fallback(weak)
+    if fallback:
+        return fallback, "fallback", weak
+
+    return None, None, weak
+
+
 def _save_score(lesson_id, score_percent):
     """
-    Persist the user's best quiz score to the database, if logged in.
+    Advance the user's lesson progress after a quiz, if logged in.
 
-    Uses the existing user_lesson_progress.quiz_score column. We only ever
-    upgrade a stored score, never lower it. Fails silently — saving a score
-    should never break the quiz UI.
+    The shipped schema tracks lesson status ('not_started' / 'in_progress' /
+    'completed'), so a perfect quiz marks the lesson completed and any other
+    score marks it in-progress. Fails silently — saving progress should never
+    break the quiz UI.
     """
     user_id = st.session_state.get("user_id")
     if not user_id:
         return
     try:
-        from database import upsert_lesson_progress, get_lesson_progress
+        from database import update_lesson_progress
 
-        existing = get_lesson_progress(user_id, lesson_id)
-        best = existing.get("quiz_score") if existing else None
-        if best is None or score_percent > best:
-            upsert_lesson_progress(
-                user_id,
-                lesson_id,
-                status="in_progress",
-                quiz_score=float(score_percent),
-            )
+        status = "completed" if score_percent >= 100 else "in_progress"
+        update_lesson_progress(user_id, lesson_id, status)
+    except Exception:
+        pass
+
+
+def _record_concept_results(questions, user_answers, lesson_id=None):
+    """
+    Feed each graded answer into the adaptive concept tracker.
+
+    For every question we look up its concept tag and record whether the user
+    got it right, which updates that concept's miss count and correct-streak in
+    the database. This is what lets the review quiz target weak spots and retire
+    mastered concepts. No-ops if the user isn't logged in.
+    """
+    user_id = st.session_state.get("user_id")
+    if not user_id:
+        return
+    try:
+        from database import record_quiz_result
+
+        for i, q in enumerate(questions):
+            concept = (q.get("concept") or "General").strip() or "General"
+            selected = user_answers[i] if i < len(user_answers) else None
+            is_correct = selected is not None and selected == q.get("correct_index")
+            record_quiz_result(user_id, concept, is_correct, lesson_id=lesson_id)
     except Exception:
         pass
 
@@ -318,6 +432,22 @@ def show_quiz_section(lesson_id=None):
     `lesson_id` argument is accepted for backward compatibility but unused.
     """
     st.subheader("📝 Quick Quiz")
+
+    user_id = st.session_state.get("user_id")
+    mode = st.radio(
+        "Quiz mode",
+        options=["By lesson", "🎯 Review weak spots"],
+        horizontal=True,
+        key="quiz_mode",
+        label_visibility="collapsed",
+    )
+
+    # Review mode: adaptive quiz weighted toward the concepts this user keeps
+    # missing. Falls back to a friendly message when there's nothing to review.
+    if mode == "🎯 Review weak spots":
+        _run_review_quiz(user_id)
+        return
+
     st.caption(
         "Pick a lesson to be quizzed on. A short multiple-choice quiz is "
         "generated from that lesson's material."
@@ -328,37 +458,143 @@ def show_quiz_section(lesson_id=None):
         st.info("No lesson content is available to quiz on yet.")
         return
 
-    titles = {1: "Buy and Hold"}
+    titles = LESSON_TITLES
 
     # The selected lesson is remembered across reruns. None = nothing picked yet.
     if "quiz_pick" not in st.session_state:
         st.session_state.quiz_pick = None
 
     st.markdown("**Choose a lesson:**")
-    cols = st.columns(len(available))
-    for col, lid in zip(cols, available):
-        label = titles.get(lid, f"Lesson {lid}")
-        # The currently selected lesson renders highlighted (primary).
-        is_selected = (st.session_state.quiz_pick == lid)
-        with col:
-            if st.button(
-                label,
-                key=f"quiz_pick_btn_{lid}",
-                type="primary" if is_selected else "secondary",
-            ):
-                # Clicking a lesson selects it AND starts its quiz. Switching
-                # away from a different lesson clears that one's state first.
-                if st.session_state.quiz_pick is not None and st.session_state.quiz_pick != lid:
-                    _clear_quiz_state(st.session_state.quiz_pick)
-                st.session_state.quiz_pick = lid
-                _ensure_quiz_loaded(lid)
-                st.rerun()
+    # Lay the lesson buttons out in rows of five so all ten fit comfortably.
+    per_row = 5
+    for row_start in range(0, len(available), per_row):
+        row = available[row_start:row_start + per_row]
+        cols = st.columns(per_row)
+        for col, lid in zip(cols, row):
+            label = titles.get(lid, f"Lesson {lid}")
+            # The currently selected lesson renders highlighted (primary).
+            is_selected = (st.session_state.quiz_pick == lid)
+            with col:
+                if st.button(
+                    label,
+                    key=f"quiz_pick_btn_{lid}",
+                    type="primary" if is_selected else "secondary",
+                    use_container_width=True,
+                ):
+                    # Clicking a lesson selects it AND starts its quiz. Switching
+                    # away from a different lesson clears that one's state first.
+                    if st.session_state.quiz_pick is not None and st.session_state.quiz_pick != lid:
+                        _clear_quiz_state(st.session_state.quiz_pick)
+                    st.session_state.quiz_pick = lid
+                    _ensure_quiz_loaded(lid)
+                    st.rerun()
 
     picked = st.session_state.quiz_pick
     if picked is None:
         return
 
     _run_quiz_for_lesson(picked)
+
+def _run_review_quiz(user_id):
+    """
+    Adaptive review-quiz flow: show the user's weakest concepts, generate a quiz
+    weighted toward them, then answer -> submit -> score. Every answer is
+    recorded, so concepts get retired from the review list once mastered.
+    """
+    if not user_id:
+        st.info("Log in to build a personalized review from the concepts you miss.")
+        return
+
+    from database import get_weak_concepts
+
+    weak = get_weak_concepts(user_id, limit=5)
+    if not weak:
+        st.success(
+            "No weak spots tracked yet — take a few lesson quizzes and anything "
+            "you miss will show up here for targeted review."
+        )
+        return
+
+    st.markdown("**Your weakest concepts right now:**")
+    st.write(" · ".join(f"{c['concept']} (missed {c['times_missed']}×)" for c in weak))
+
+    quiz_key = "quiz_questions_review"
+    source_key = "quiz_source_review"
+    submitted_key = "quiz_submitted_review"
+
+    # --- Generate ----------------------------------------------------------
+    if quiz_key not in st.session_state:
+        if st.button("Generate review quiz", key="gen_quiz_review", type="primary"):
+            with st.spinner("Building a review from your weak spots..."):
+                questions, source, _ = generate_review_quiz(user_id)
+            if not questions:
+                st.warning("Couldn't build a review quiz right now — try again in a moment.")
+                return
+            st.session_state[quiz_key] = questions
+            st.session_state[source_key] = source
+            st.session_state[submitted_key] = False
+            st.rerun()
+        return
+
+    questions = st.session_state[quiz_key]
+    source = st.session_state.get(source_key, "ai")
+    if source == "fallback":
+        st.info("Showing built-in review questions (AI generation was unavailable).")
+
+    # --- Answer ------------------------------------------------------------
+    submitted = st.session_state.get(submitted_key, False)
+    user_answers = []
+    for i, q in enumerate(questions):
+        st.markdown(f"**Question {i + 1}. {q['question']}**")
+        st.caption(f"Concept: {q.get('concept', 'General')}")
+        choice = st.radio(
+            "Choose one:",
+            options=list(range(len(q["options"]))),
+            format_func=lambda idx, opts=q["options"]: opts[idx],
+            key=f"quiz_ans_review_{i}",
+            index=None,
+            disabled=submitted,
+        )
+        user_answers.append(choice)
+        if submitted:
+            correct = q["correct_index"]
+            if choice == correct:
+                st.success(f"Correct — {q['options'][correct]}")
+            else:
+                picked = q["options"][choice] if choice is not None else "No answer"
+                st.error(f"Your answer: {picked}")
+                st.markdown(f"Correct answer: **{q['options'][correct]}**")
+            if q["explanation"]:
+                st.caption(f"Why: {q['explanation']}")
+        st.markdown("")
+
+    # --- Submit / results --------------------------------------------------
+    if not submitted:
+        if st.button("Submit answers", key="submit_quiz_review", type="primary"):
+            if any(a is None for a in user_answers):
+                st.warning("Please answer all questions before submitting.")
+            else:
+                _record_concept_results(questions, user_answers, lesson_id=None)
+                st.session_state[submitted_key] = True
+                st.rerun()
+    else:
+        result = grade_quiz(questions, user_answers)
+        st.markdown("---")
+        st.metric(
+            "Your score",
+            f"{result['correct_count']} / {result['total']}  ({result['score_percent']}%)",
+        )
+        st.caption(
+            "Concepts you answer correctly twice in a row are retired from your review list."
+        )
+        if st.button("New review quiz", key="retry_quiz_review"):
+            stale = [quiz_key, source_key, submitted_key] + [
+                f"quiz_ans_review_{i}" for i in range(len(questions))
+            ]
+            for k in stale:
+                st.session_state.pop(k, None)
+            st.rerun()
+
 
 def _clear_quiz_state(lesson_id):
     """Wipe a lesson's quiz state so a fresh quiz can start."""
@@ -446,6 +682,7 @@ def _run_quiz_for_lesson(lesson_id):
             if any(a is None for a in user_answers):
                 st.warning("Please answer all questions before submitting.")
             else:
+                _record_concept_results(questions, user_answers, lesson_id=lesson_id)
                 st.session_state[submitted_key] = True
                 st.rerun()
     else:
