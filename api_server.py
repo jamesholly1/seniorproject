@@ -23,16 +23,13 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import jwt
 
 from database import (
-    authenticate_user, create_user, get_user_by_username,
+    authenticate_user, create_user, get_user_by_id,
     get_user_tickers, add_user_ticker, remove_user_ticker, clear_user_tickers,
+    create_session, get_session, delete_session, revoke_user_sessions,
 )
-from stooq_data import get_stock_info, get_historical_data
-
-SECRET_KEY = os.getenv("JWT_SECRET", "jrg-trading-secret-2024")
-ALGORITHM = "HS256"
+from itick_data import get_stock_info, get_historical_data
 
 app = FastAPI(title="JRG Trading API", version="2.0")
 
@@ -62,18 +59,25 @@ class AddTickerBody(BaseModel):
 
 # ── Auth helpers ─────────────────────────────────────────────────────────────
 
-def _create_token(user_id: int, username: str) -> str:
-    return jwt.encode({"user_id": user_id, "username": username}, SECRET_KEY, algorithm=ALGORITHM)
+def _bearer_token(authorization: Optional[str]) -> str:
+    """Pull the token out of an Authorization header, or reject the request."""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return authorization.split(" ", 1)[1]
 
 
 def _current_user(authorization: Optional[str] = Header(None)) -> dict:
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    token = authorization.split(" ", 1)[1]
-    try:
-        return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    """Resolve the caller from their session token.
+
+    The token is looked up in the sessions table rather than decoded, so a
+    session that has expired or been revoked stops working immediately. A
+    self-contained signed token could not be withdrawn before its own expiry.
+    """
+    token = _bearer_token(authorization)
+    session = get_session(token)
+    if session is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+    return {"user_id": session["user_id"], "session_token": token}
 
 
 # ── Auth routes ───────────────────────────────────────────────────────────────
@@ -83,7 +87,9 @@ def login(body: LoginBody):
     user_id = authenticate_user(body.username, body.password)
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid username or password")
-    token = _create_token(user_id, body.username)
+    token = create_session(user_id)
+    if not token:
+        raise HTTPException(status_code=500, detail="Could not start a session")
     return {"token": token, "user_id": user_id, "username": body.username}
 
 
@@ -97,10 +103,24 @@ def register(body: RegisterBody):
 
 @app.get("/api/auth/me")
 def me(user: dict = Depends(_current_user)):
-    data = get_user_by_username(user["username"])
+    data = get_user_by_id(user["user_id"])
     if not data:
         raise HTTPException(status_code=404, detail="User not found")
     return data
+
+
+@app.post("/api/auth/logout")
+def logout(user: dict = Depends(_current_user)):
+    """End the caller's session. The token stops working immediately."""
+    delete_session(user["session_token"])
+    return {"success": True}
+
+
+@app.post("/api/auth/logout-all")
+def logout_all(user: dict = Depends(_current_user)):
+    """Revoke every session belonging to the caller, on all devices."""
+    revoked = revoke_user_sessions(user["user_id"])
+    return {"success": True, "sessions_revoked": revoked}
 
 
 # ── Portfolio routes ──────────────────────────────────────────────────────────

@@ -479,6 +479,30 @@ def clear_user_tickers(user_id: int) -> bool:
         return False
 
 
+def get_user_by_id(user_id: int) -> Optional[dict]:
+    """Get user information by user_id."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT user_id, username, email, created_at, last_login_at "
+                "FROM users WHERE user_id = ?",
+                (user_id,),
+            )
+            row = cursor.fetchone()
+            if row:
+                return {
+                    "user_id": row["user_id"],
+                    "username": row["username"],
+                    "email": row["email"],
+                    "created_at": row["created_at"],
+                    "last_login_at": row["last_login_at"],
+                }
+            return None
+    except sqlite3.Error:
+        return None
+
+
 def get_all_users() -> List[dict]:
     """Get all users (for admin purposes). Excludes password hashes."""
     try:

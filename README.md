@@ -101,6 +101,8 @@ Market data comes from iTick (delayed). A shared development token ships in `iti
 ```
 comp4960-project-investors-center/
 ├── main.py                     # Streamlit entry point, auth flow, tab layout
+├── api_server.py               # FastAPI back end for the React front end
+├── jrg-finance/                # React front end (Vite)
 ├── run.sh                      # Startup script
 ├── requirements.txt            # Python dependencies
 ├── pytest.ini                  # Test configuration
@@ -114,6 +116,8 @@ comp4960-project-investors-center/
 ├── learn.py                    # Learn tab: lessons, strategies, backtesting
 ├── Backtesting_log_page.py     # Backtest log tab
 ├── tutor.py                    # AI tutor tab
+├── quiz.py                     # Adaptive quiz engine
+├── ui_helpers.py               # Shared Streamlit UI helpers
 ├── notifications.py            # Price thresholds and alert checking
 ├── news_api.py                 # News integration
 ├── itick_data.py               # iTick market data client (the live source)
@@ -124,6 +128,7 @@ comp4960-project-investors-center/
     ├── test_database.py            # Users, tickers, admin helpers
     ├── test_jrg_schema.py          # Domain tables: constraints and cascades
     ├── test_sessions.py            # Session lifecycle, expiry, revocation
+    ├── test_api_auth.py            # API login, logout, revocation, expiry
     ├── test_seed_lessons.py        # Lesson seeding and progress foreign key
     ├── test_auth_integration.py    # Registration, login, lockout
     ├── test_notifications.py       # Thresholds and alert triggering
@@ -134,6 +139,37 @@ comp4960-project-investors-center/
     ├── test_stooq_integration.py   # Retrieval tests for the superseded copy
     └── test_main.py                # Application wiring
 ```
+
+## Two Front Ends, One Back End
+
+The project ships two interfaces over the same database:
+
+- **Streamlit** (`main.py`) — the original full-featured app, run with `streamlit run main.py`
+- **React + FastAPI** (`jrg-finance/` and `api_server.py`) — the newer split front end
+
+Both authenticate the same way. `database.py` owns password verification and sessions, so Argon2id hashing, account lockout, session expiry, and revocation behave identically no matter which front end is in use.
+
+### Running the API and React front end
+
+```bash
+# Terminal 1 — API on port 8000
+uvicorn api_server:app --reload
+
+# Terminal 2 — React dev server on port 5173
+cd jrg-finance && npm install && npm run dev
+```
+
+### API authentication
+
+`POST /api/auth/login` returns an opaque session token. The client sends it as `Authorization: Bearer <token>` on subsequent requests, and the server resolves it against the `sessions` table on every call.
+
+| Endpoint | Effect |
+| --- | --- |
+| `POST /api/auth/login` | Creates a session, returns the token |
+| `POST /api/auth/logout` | Deletes the caller's session |
+| `POST /api/auth/logout-all` | Revokes every session for that user |
+
+Because the token is looked up rather than decoded, logout and revocation take effect immediately. A self-contained signed token cannot be withdrawn before its own expiry, which is why the API does not use one.
 
 ## Database Schema
 
