@@ -92,19 +92,6 @@ class DashboardManager:
             margin-bottom: 10px;
         }}
 
-        div[data-testid="stButton"] > button[help^="Click to add"] {{
-            background: {WHITE} !important;
-            color: {PRIMARY} !important;
-            border: 1px solid {BORDER} !important;
-            text-align: left !important;
-            white-space: pre-wrap !important;
-        }}
-
-        div[data-testid="stButton"] > button[help^="Click to add"]:hover {{
-            border-color: {PRIMARY} !important;
-            background: {PRIMARY_GLOW} !important;
-        }}
-
         .grid-selector {{
             display: grid;
             grid-template-columns: repeat(4, 1fr);

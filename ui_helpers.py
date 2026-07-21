@@ -46,9 +46,25 @@ footer                       {{ visibility: hidden; }}
 
 /* ── HEADINGS ── */
 h1, h2, h3, h4 {{
-    font-family: 'Playfair Display', Georgia, serif;
-    color: {TEXT};
+    font-family: 'Playfair Display', Georgia, serif !important;
+    color: {TEXT} !important;
     letter-spacing: -0.015em;
+}}
+
+/* ── BODY TEXT ──
+   Streamlit falls back to its own theme's text color (white, on a
+   dark-mode browser) for plain markdown/write content that isn't
+   covered by a more specific rule above. Pin it so lesson/tutor/log
+   prose stays readable against our light background regardless of
+   the visitor's OS/browser color-scheme preference. */
+[data-testid="stMarkdownContainer"],
+[data-testid="stMarkdownContainer"] p,
+[data-testid="stMarkdownContainer"] li,
+[data-testid="stMarkdownContainer"] span,
+[data-testid="stMarkdownContainer"] strong,
+[data-testid="stMarkdownContainer"] em,
+[data-testid="stText"] {{
+    color: {TEXT} !important;
 }}
 
 /* ── TEXT INPUTS ── */
@@ -121,7 +137,7 @@ div[data-testid="stFormSubmitButton"] > button:hover {{
 }}
 
 /* ── PRIMARY BUTTON ── */
-div[data-testid="stButton"] > button[kind="primary"] {{
+div[data-testid="stButton"] button[kind="primary"] {{
     background: {PRIMARY} !important;
     color: white !important;
     border: none !important;
@@ -132,15 +148,15 @@ div[data-testid="stButton"] > button[kind="primary"] {{
     transition: background 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease !important;
 }}
 
-div[data-testid="stButton"] > button[kind="primary"]:hover {{
+div[data-testid="stButton"] button[kind="primary"]:hover {{
     background: {PRIMARY_DARK} !important;
     box-shadow: 0 4px 16px {PRIMARY_GLOW} !important;
     transform: translateY(-1px) !important;
 }}
 
 /* ── SECONDARY / NAV BUTTONS (text-link style) ── */
-div[data-testid="stButton"] > button[kind="secondary"],
-div[data-testid="stButton"] > button:not([kind]) {{
+div[data-testid="stButton"] button[kind="secondary"],
+div[data-testid="stButton"] button:not([kind]) {{
     background: transparent !important;
     color: {PRIMARY} !important;
     border: none !important;
@@ -156,8 +172,8 @@ div[data-testid="stButton"] > button:not([kind]) {{
     text-decoration-color: rgba(13,92,106,0.35) !important;
 }}
 
-div[data-testid="stButton"] > button[kind="secondary"]:hover,
-div[data-testid="stButton"] > button:not([kind]):hover {{
+div[data-testid="stButton"] button[kind="secondary"]:hover,
+div[data-testid="stButton"] button:not([kind]):hover {{
     color: {PRIMARY_DARK} !important;
     background: rgba(13,92,106,0.05) !important;
     transform: none !important;
@@ -282,9 +298,14 @@ div[data-testid="stExpander"] {{
 }}
 
 div[data-testid="stExpander"] summary {{
+    background: {WHITE} !important;
     font-family: 'DM Sans', sans-serif !important;
     font-weight: 500 !important;
     color: {TEXT} !important;
+}}
+
+div[data-testid="stExpander"] summary:hover {{
+    color: {PRIMARY} !important;
 }}
 
 /* ── BORDERED CONTAINERS (st.container(border=True)) ── */
@@ -294,7 +315,7 @@ div[data-testid="stVerticalBlockBorderWrapper"] > div {{
 }}
 
 /* ── DEFAULT BUTTONS (Add / Remove / actions outside forms) ── */
-div[data-testid="stButton"] > button[kind="secondary"] {{
+div[data-testid="stButton"] button[kind="secondary"] {{
     background: {WHITE} !important;
     color: {PRIMARY} !important;
     border: 1.5px solid {PRIMARY} !important;
@@ -305,7 +326,7 @@ div[data-testid="stButton"] > button[kind="secondary"] {{
     padding: 0.5rem 1.1rem !important;
 }}
 
-div[data-testid="stButton"] > button[kind="secondary"]:hover {{
+div[data-testid="stButton"] button[kind="secondary"]:hover {{
     background: rgba(13,92,106,0.06) !important;
     color: {PRIMARY_DARK} !important;
     border-color: {PRIMARY_DARK} !important;
