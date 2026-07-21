@@ -152,8 +152,8 @@ Both authenticate the same way. `database.py` owns password verification and ses
 ### Running the API and React front end
 
 ```bash
-# Terminal 1 — API on port 8000
-uvicorn api_server:app --reload
+# Terminal 1 — API on port 8000 (Vite proxies /api here)
+uvicorn api_server:app --reload --port 8000
 
 # Terminal 2 — React dev server on port 5173
 cd jrg-finance && npm install && npm run dev

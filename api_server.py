@@ -19,19 +19,34 @@ for _name in ("error", "warning", "success", "info", "write", "spinner"):
 sys.modules["streamlit"] = _st
 
 import os
+from contextlib import asynccontextmanager
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from database import (
-    authenticate_user, create_user, get_user_by_id,
+    initialize_database, authenticate_user, create_user, get_user_by_id,
     get_user_tickers, add_user_ticker, remove_user_ticker, clear_user_tickers,
     create_session, get_session, delete_session, revoke_user_sessions,
 )
 from itick_data import get_stock_info, get_historical_data
+from seed_lessons import seed_lessons
 
-app = FastAPI(title="JRG Trading API", version="2.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Prepare the database before the API serves anything.
+
+    The Streamlit app does this in main(); without it here, running the API
+    against a directory that has no database yields a 500 on the first write
+    instead of a working app. Both calls are safe to repeat.
+    """
+    initialize_database()
+    seed_lessons(verbose=False)
+    yield
+
+
+app = FastAPI(title="JRG Trading API", version="2.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
