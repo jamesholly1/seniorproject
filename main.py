@@ -12,6 +12,7 @@ from notifications import auto_check_thresholds_in_session, display_session_noti
 from learn import show_learn_tab
 from Backtesting_log_page import show_backtest_log_tab
 from tutor import show_tutor_tab
+from seed_lessons import seed_lessons
 import streamlit as st
 import time
 import plotly.graph_objects as go
@@ -30,6 +31,10 @@ def main():
     
     # Initialize database
     initialize_database()
+
+    # Lesson progress rows have a foreign key to the lessons table, so a fresh
+    # database needs its lesson rows before any progress can be saved. Idempotent.
+    seed_lessons(verbose=False)
 
     # Clear expired sessions on each load.
     purge_expired_sessions()

@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import streamlit as st
 import requests
@@ -6,13 +7,24 @@ from typing import Dict, List
 from datetime import datetime
 import time
 
+from dotenv import load_dotenv
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+load_dotenv()
+
 _BASE_URL = "https://api0.itick.org"
+
+# The API token is read from the environment so it does not have to live in the
+# source tree. The literal below is the shared development token and keeps the
+# app working for anyone who has not set ITICK_API_KEY yet.
+_DEFAULT_TOKEN = "205a99f7d0e3427f88620c9e1aee2730129d72fa7c5d4300b737782004424076"
+_TOKEN = os.getenv("ITICK_API_KEY", _DEFAULT_TOKEN)
+
 _HEADERS = {
     "accept": "application/json",
-    "token": "205a99f7d0e3427f88620c9e1aee2730129d72fa7c5d4300b737782004424076",
+    "token": _TOKEN,
 }
 
 # Maps period strings to approximate trading-day counts
