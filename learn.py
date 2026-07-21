@@ -7,6 +7,7 @@ from database import (
     get_lesson_progress, update_lesson_progress,
     save_backtest_log, get_user_backtest_logs,
 )
+from ui_helpers import section_header_html, PRIMARY
 
 # Lesson registry — each entry is a dict: {id, title, subtitle, render}
 # To add a lesson: append to this list and write a render function below.
@@ -27,11 +28,10 @@ def show_learn_tab(user_id):
     """
     Display the lessons tab. user_id is the logged-in user's database id.
     """
-    st.header("Quantitative Trading — Strategy Lessons")
-    st.markdown(
-        "Each lesson teaches one strategy from first principles: "
-        "what it is, why it works mathematically, and how to code it."
-    )
+    st.html(section_header_html(
+        "Learn", "Strategy Lessons",
+        "Each lesson teaches one strategy from first principles: what it is, why it works mathematically, and how to code it."
+    ))
 
     if not LESSONS:
         st.warning("No lessons available yet.")
@@ -74,7 +74,7 @@ def show_learn_tab(user_id):
         return
 
     # Render the selected lesson
-    lesson = next((l for l in LESSONS if l["id"] == st.session_state.learn_lesson), None)
+    lesson = next((entry for entry in LESSONS if entry["id"] == st.session_state.learn_lesson), None)
     if lesson is None:
         st.session_state.learn_lesson = None
         st.rerun()
@@ -90,7 +90,7 @@ def show_learn_tab(user_id):
 
     # Prev / next navigation at the bottom
     st.markdown("---")
-    lesson_ids = [l["id"] for l in LESSONS]
+    lesson_ids = [entry["id"] for entry in LESSONS]
     current_idx = lesson_ids.index(lesson["id"])
 
     nav_col1, nav_col2 = st.columns(2)
@@ -1464,7 +1464,9 @@ def _vwap_signals_from_df(df, threshold):
 
 def _run_vwap_backtest(ticker, period, threshold):
     """
-    VWAP-specific backtest runner — needs the full OHLCV DataFrame, not just prices.
+    VWAP-specific backtest runner — needs the full OHLCV DataFrame (not just Close),
+    since VWAP is computed from High/Low/Close/Volume. Everything after signal
+    generation is identical to _run_signal_backtest, so it reuses the same helpers.
     """
     with st.spinner(f"Loading {ticker} data..."):
         df = get_historical_data(ticker, period=period)
@@ -1475,85 +1477,30 @@ def _run_vwap_backtest(ticker, period, threshold):
 
     prices = df["Close"].dropna()
     signals = _vwap_signals_from_df(df, threshold)
-
-    raw_pos = signals.map({"BUY": 1.0, "SELL": 0.0, "HOLD": float("nan")})
-    position = raw_pos.ffill().fillna(0.0)
-
-    market_returns = prices.pct_change()
-    strategy_returns = position.shift(1) * market_returns
-
-    strategy_equity = (1 + strategy_returns).cumprod()
+    position = _position_from_signals(signals)
+    strategy_equity, strategy_returns = _equity_curve_from_position(prices, position)
     bh_equity = prices / prices.iloc[0]
 
-    years = len(prices) / 252
-    strat_total = float(strategy_equity.iloc[-1])
-    strat_cagr = strat_total ** (1 / years) - 1
-
-    roll_peak = strategy_equity.cummax()
-    drawdown = (strategy_equity - roll_peak) / roll_peak
-    max_dd = float(drawdown.min())
-
-    clean = strategy_returns.dropna()
-    sharpe = float((clean.mean() / clean.std()) * np.sqrt(252)) if clean.std() > 0 else 0.0
-
+    metrics = _backtest_metrics(prices, strategy_equity, strategy_returns)
     n_trades = int((signals != signals.shift()).sum())
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total Return", f"{(strat_total - 1) * 100:.1f}%")
-    m2.metric("CAGR", f"{strat_cagr * 100:.1f}%")
-    m3.metric("Max Drawdown", f"{max_dd * 100:.1f}%")
-    m4.metric("Sharpe Ratio", f"{sharpe:.2f}")
+    _render_metrics_row(metrics["total_return"], metrics["cagr"], metrics["max_drawdown"], metrics["sharpe"])
     st.caption(f"Signal changes (trades): {n_trades}")
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=strategy_equity.index, y=strategy_equity.values,
-        name="VWAP", line=dict(color="cyan", width=2),
-    ))
-    fig.add_trace(go.Scatter(
-        x=bh_equity.index, y=bh_equity.values,
-        name="Buy & Hold", line=dict(color="orange", width=2, dash="dot"),
-    ))
-    fig.update_layout(
+    _render_equity_curve_chart(
+        strategy_equity, bh_equity, "VWAP",
         title=f"{ticker} — VWAP vs Buy & Hold (start = $1.00)",
-        template="plotly_dark", height=420,
-        xaxis_title="Date", yaxis_title="Portfolio Value ($)",
-        hovermode="x unified", legend=dict(x=0, y=1),
     )
-    st.plotly_chart(fig, use_container_width=True)
-
-    fig2 = go.Figure()
-    fig2.add_trace(go.Scatter(
-        x=drawdown.index, y=drawdown.values * 100,
-        name="Drawdown", fill="tozeroy",
-        line=dict(color="red", width=1),
-        fillcolor="rgba(255,50,50,0.25)",
-    ))
-    fig2.update_layout(
-        title=f"{ticker} VWAP — Drawdown from Peak (%)",
-        template="plotly_dark", height=250,
-        xaxis_title="Date", yaxis_title="Drawdown (%)", showlegend=False,
-    )
-    st.plotly_chart(fig2, use_container_width=True)
+    _render_drawdown_chart(metrics["drawdown"], title=f"{ticker} VWAP — Drawdown from Peak (%)")
 
     bh_total = float(bh_equity.iloc[-1])
-    bh_cagr = bh_total ** (1 / years) - 1
-    beat = strat_cagr > bh_cagr
-    st.markdown(f"""
-**Reading these results for {ticker} over {period}:**
+    bh_years = len(prices) / 252
+    bh_cagr = bh_total ** (1 / bh_years) - 1
+    _render_strategy_vs_bh_narrative(
+        ticker, period, metrics["total_return"], metrics["cagr"], bh_total, bh_cagr, n_trades,
+    )
 
-- The strategy returned **{(strat_total-1)*100:.1f}%** vs buy & hold's **{(bh_total-1)*100:.1f}%**.
-- {"The strategy beat buy & hold on CAGR (" + f"{strat_cagr*100:.1f}% vs {bh_cagr*100:.1f}%" + ")." if beat else "Buy & hold won on CAGR (" + f"{bh_cagr*100:.1f}% vs {strat_cagr*100:.1f}%" + "). This is common — active strategies have to clear a high bar."}
-- The strategy made **{n_trades} signal changes**. More trades = more transaction costs in real life.
-""")
-
-    # Persist result and mark lesson completed
-    user_id = st.session_state.get("learn_user_id")
-    lesson_id = st.session_state.get("learn_lesson")
-    if user_id and lesson_id:
-        save_backtest_log(user_id, lesson_id, ticker, "VWAP", period,
-                          strat_total - 1, strat_cagr, max_dd, sharpe, n_trades)
-        update_lesson_progress(user_id, lesson_id, "completed")
+    _save_backtest_result(ticker, "VWAP", period, metrics, n_trades)
 
 
 # Lesson 9 — TWAP
@@ -1951,29 +1898,21 @@ def _run_regime_backtest(ticker, period, bull_thresh, bear_thresh):
     # Align regime to stock dates
     regime_aligned = regime.reindex(prices.index, method="ffill")
 
-    # Convert regime to position
+    # Unlike the BUY/SELL/HOLD strategies, "sideways" isn't a signal to hold the
+    # prior position — it's its own half-exposure stance, so we map directly to
+    # a position instead of going through _position_from_signals.
     position = regime_aligned.map({"bullish": 1.0, "bearish": 0.0, "sideways": 0.5})
     position = position.fillna(0.5)
 
-    market_returns = prices.pct_change()
-    strategy_returns = position.shift(1) * market_returns
-    strategy_equity = (1 + strategy_returns).cumprod()
+    strategy_equity, strategy_returns = _equity_curve_from_position(prices, position)
     bh_equity = prices / prices.iloc[0]
-
+    metrics = _backtest_metrics(prices, strategy_equity, strategy_returns)
+    strat_total, strat_cagr, max_dd, sharpe = (
+        metrics["total_return"], metrics["cagr"], metrics["max_drawdown"], metrics["sharpe"],
+    )
     years = len(prices) / 252
-    strat_total = float(strategy_equity.iloc[-1])
-    strat_cagr = strat_total ** (1 / years) - 1
-    roll_peak = strategy_equity.cummax()
-    drawdown = (strategy_equity - roll_peak) / roll_peak
-    max_dd = float(drawdown.min())
-    clean = strategy_returns.dropna()
-    sharpe = float((clean.mean() / clean.std()) * np.sqrt(252)) if clean.std() > 0 else 0.0
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total Return", f"{(strat_total - 1) * 100:.1f}%")
-    m2.metric("CAGR", f"{strat_cagr * 100:.1f}%")
-    m3.metric("Max Drawdown", f"{max_dd * 100:.1f}%")
-    m4.metric("Sharpe Ratio", f"{sharpe:.2f}")
+    _render_metrics_row(strat_total, strat_cagr, max_dd, sharpe)
 
     # VIX chart with regime shading
     fig_vix = go.Figure()
@@ -2019,7 +1958,8 @@ def _run_regime_backtest(ticker, period, bull_thresh, bear_thresh):
     bh_cagr = bh_total ** (1 / years) - 1
     beat = strat_cagr > bh_cagr
 
-    # Regime breakdown
+    # Regime breakdown — unique to this lesson, so it isn't pulled into the
+    # shared narrative helper used by the other three runners.
     regime_counts = regime_aligned.value_counts()
     st.markdown(f"""
 **Regime breakdown over {period}:**
@@ -2034,16 +1974,152 @@ def _run_regime_backtest(ticker, period, bull_thresh, bear_thresh):
 - {"The regime filter added alpha — CAGR " + f"{strat_cagr*100:.1f}% vs {bh_cagr*100:.1f}%." if beat else "Buy & hold won — CAGR " + f"{bh_cagr*100:.1f}% vs {strat_cagr*100:.1f}%. The regime filter reduced both losses and gains."}
 """)
 
-    # Persist result
+    # n_trades isn't meaningful for a regime overlay (it holds a stance for
+    # long stretches rather than discrete trades), so it's logged as 0.
+    _save_backtest_result(ticker, "Macro Regime", period, metrics, n_trades=0)
+
+
+# Shared backtest utilities
+#
+# All four backtest runners below (_run_signal_backtest, _run_buy_and_hold_backtest,
+# _run_vwap_backtest, _run_regime_backtest) used to each duplicate the same metric
+# math, the same two Plotly charts, and the same "save to DB" block. That duplication
+# meant a bug fix (e.g. the Sharpe divide-by-zero guard) had to be copy-pasted four
+# times and was easy to miss in one spot. Pulling the shared pieces out here means
+# each runner only contains what is actually specific to that strategy.
+
+def _position_from_signals(signals):
+    """
+    Convert a BUY/SELL/HOLD signal Series into a numeric position (1.0 = long, 0.0 = cash).
+    HOLD carries forward the last non-HOLD signal (ffill) since "hold" means
+    "keep whatever position you already had," not "go to cash."
+    """
+    raw_position = signals.map({"BUY": 1.0, "SELL": 0.0, "HOLD": np.nan})
+    return raw_position.ffill().fillna(0.0)
+
+
+def _equity_curve_from_position(prices, position):
+    """
+    Turn a daily position (1.0 long / 0.0 cash) into a cumulative equity curve.
+    position.shift(1) means today's return is earned using *yesterday's* position —
+    without the shift, the backtest would act on information (today's own signal)
+    before it was actually available, which is a classic lookahead-bias bug.
+    """
+    market_returns = prices.pct_change()
+    strategy_returns = position.shift(1) * market_returns
+    equity = (1 + strategy_returns).cumprod()
+    return equity, strategy_returns
+
+
+def _backtest_metrics(prices, equity, returns):
+    """
+    Compute the standard set of backtest metrics (CAGR, max drawdown, Sharpe)
+    shared by every strategy in this file.
+    """
+    years = len(prices) / 252  # ~252 trading days per year
+    total_return = float(equity.iloc[-1])
+    cagr = total_return ** (1 / years) - 1
+
+    rolling_peak = equity.cummax()
+    drawdown = (equity - rolling_peak) / rolling_peak
+    max_drawdown = float(drawdown.min())
+
+    clean_returns = returns.dropna()
+    # Guard against std() == 0 (e.g. a strategy that never trades) to avoid a NaN Sharpe
+    sharpe = (
+        float((clean_returns.mean() / clean_returns.std()) * np.sqrt(252))
+        if clean_returns.std() > 0 else 0.0
+    )
+
+    return {
+        "total_return": total_return,
+        "cagr": cagr,
+        "drawdown": drawdown,
+        "max_drawdown": max_drawdown,
+        "sharpe": sharpe,
+    }
+
+
+def _render_metrics_row(total_return, cagr, max_drawdown, sharpe):
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total Return", f"{(total_return - 1) * 100:.1f}%")
+    m2.metric("CAGR", f"{cagr * 100:.1f}%")
+    m3.metric("Max Drawdown", f"{max_drawdown * 100:.1f}%")
+    m4.metric("Sharpe Ratio", f"{sharpe:.2f}")
+
+
+def _render_equity_curve_chart(strategy_equity, benchmark_equity, strategy_name, title):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=strategy_equity.index, y=strategy_equity.values,
+        name=strategy_name, line=dict(color="cyan", width=2),
+    ))
+    fig.add_trace(go.Scatter(
+        x=benchmark_equity.index, y=benchmark_equity.values,
+        name="Buy & Hold", line=dict(color="orange", width=2, dash="dot"),
+    ))
+    fig.update_layout(
+        title=title, template="plotly_dark", height=420,
+        xaxis_title="Date", yaxis_title="Portfolio Value ($)",
+        hovermode="x unified", legend=dict(x=0, y=1),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_drawdown_chart(drawdown, title):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=drawdown.index, y=drawdown.values * 100,
+        name="Drawdown", fill="tozeroy",
+        line=dict(color="red", width=1),
+        fillcolor="rgba(255,50,50,0.25)",
+    ))
+    fig.update_layout(
+        title=title, template="plotly_dark", height=250,
+        xaxis_title="Date", yaxis_title="Drawdown (%)", showlegend=False,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def _render_strategy_vs_bh_narrative(ticker, period, strat_total, strat_cagr, bh_total, bh_cagr, n_trades=None):
+    """
+    Plain-English summary comparing a strategy's result to buy & hold.
+    n_trades is optional since not every strategy (e.g. the regime overlay) counts trades the same way.
+    """
+    beat = strat_cagr > bh_cagr
+    cagr_line = (
+        f"The strategy beat buy & hold on CAGR ({strat_cagr*100:.1f}% vs {bh_cagr*100:.1f}%)."
+        if beat else
+        f"Buy & hold won on CAGR ({bh_cagr*100:.1f}% vs {strat_cagr*100:.1f}%). "
+        "This is common — active strategies have to clear a high bar."
+    )
+    trades_line = (
+        f"\n- The strategy made **{n_trades} signal changes**. More trades = more transaction costs in real life."
+        if n_trades is not None else ""
+    )
+    st.markdown(f"""
+**Reading these results for {ticker} over {period}:**
+
+- The strategy returned **{(strat_total-1)*100:.1f}%** vs buy & hold's **{(bh_total-1)*100:.1f}%**.
+- {cagr_line}{trades_line}
+""")
+
+
+def _save_backtest_result(ticker, strategy_name, period, metrics, n_trades):
+    """
+    Persist the backtest to the log and mark the current lesson completed.
+    No-ops if there's no logged-in user or open lesson (e.g. called outside the Learn tab).
+    """
     user_id = st.session_state.get("learn_user_id")
     lesson_id = st.session_state.get("learn_lesson")
     if user_id and lesson_id:
-        save_backtest_log(user_id, lesson_id, ticker, "Macro Regime", period,
-                          strat_total - 1, strat_cagr, max_dd, sharpe, 0)
+        save_backtest_log(
+            user_id, lesson_id, ticker, strategy_name, period,
+            metrics["total_return"] - 1, metrics["cagr"], metrics["max_drawdown"],
+            metrics["sharpe"], n_trades,
+        )
         update_lesson_progress(user_id, lesson_id, "completed")
 
-
-# Shared signal-based backtest runner
 
 def _run_signal_backtest(ticker, period, strategy_name, signal_fn, *signal_args):
     """
@@ -2059,104 +2135,34 @@ def _run_signal_backtest(ticker, period, strategy_name, signal_fn, *signal_args)
 
     prices = df["Close"].dropna()
 
-    # Generate signals then convert to a numeric position: 1 = long, 0 = cash
     signals = signal_fn(prices, *signal_args)
-    raw_pos = signals.map({"BUY": 1.0, "SELL": 0.0, "HOLD": np.nan})
-    position = raw_pos.ffill().fillna(0.0)
-
-    # Strategy daily returns = position held *yesterday* × today's market return
-    # shift(1) prevents lookahead bias — you can only act on yesterday's signal
-    market_returns = prices.pct_change()
-    strategy_returns = position.shift(1) * market_returns
-
-    strategy_equity = (1 + strategy_returns).cumprod()
+    position = _position_from_signals(signals)
+    strategy_equity, strategy_returns = _equity_curve_from_position(prices, position)
     bh_equity = prices / prices.iloc[0]
 
-    # Metrics
-    years = len(prices) / 252
-    strat_total = float(strategy_equity.iloc[-1])
-    strat_cagr = strat_total ** (1 / years) - 1
-
-    strat_roll_peak = strategy_equity.cummax()
-    strat_drawdown = (strategy_equity - strat_roll_peak) / strat_roll_peak
-    strat_max_dd = float(strat_drawdown.min())
-
-    clean = strategy_returns.dropna()
-    strat_sharpe = float((clean.mean() / clean.std()) * np.sqrt(252)) if clean.std() > 0 else 0.0
-
+    metrics = _backtest_metrics(prices, strategy_equity, strategy_returns)
     n_trades = int((signals != signals.shift()).sum())
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total Return", f"{(strat_total - 1) * 100:.1f}%")
-    m2.metric("CAGR", f"{strat_cagr * 100:.1f}%")
-    m3.metric("Max Drawdown", f"{strat_max_dd * 100:.1f}%")
-    m4.metric("Sharpe Ratio", f"{strat_sharpe:.2f}")
-
+    _render_metrics_row(metrics["total_return"], metrics["cagr"], metrics["max_drawdown"], metrics["sharpe"])
     st.caption(f"Signal changes (trades): {n_trades}")
 
-    # Equity curve — strategy vs buy and hold
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=strategy_equity.index,
-        y=strategy_equity.values,
-        name=strategy_name,
-        line=dict(color="cyan", width=2),
-    ))
-    fig.add_trace(go.Scatter(
-        x=bh_equity.index,
-        y=bh_equity.values,
-        name="Buy & Hold",
-        line=dict(color="orange", width=2, dash="dot"),
-    ))
-    fig.update_layout(
+    _render_equity_curve_chart(
+        strategy_equity, bh_equity, strategy_name,
         title=f"{ticker} — {strategy_name} vs Buy & Hold (start = $1.00)",
-        template="plotly_dark",
-        height=420,
-        xaxis_title="Date",
-        yaxis_title="Portfolio Value ($)",
-        hovermode="x unified",
-        legend=dict(x=0, y=1),
     )
-    st.plotly_chart(fig, use_container_width=True)
-
-    # Drawdown chart
-    fig2 = go.Figure()
-    fig2.add_trace(go.Scatter(
-        x=strat_drawdown.index,
-        y=strat_drawdown.values * 100,
-        name="Drawdown",
-        fill="tozeroy",
-        line=dict(color="red", width=1),
-        fillcolor="rgba(255,50,50,0.25)",
-    ))
-    fig2.update_layout(
+    _render_drawdown_chart(
+        metrics["drawdown"],
         title=f"{ticker} {strategy_name} — Drawdown from Peak (%)",
-        template="plotly_dark",
-        height=250,
-        xaxis_title="Date",
-        yaxis_title="Drawdown (%)",
-        showlegend=False,
     )
-    st.plotly_chart(fig2, use_container_width=True)
 
     bh_total = float(bh_equity.iloc[-1])
-    bh_cagr = bh_total ** (1 / years) - 1
-    beat = strat_cagr > bh_cagr
-    st.markdown(f"""
-**Reading these results for {ticker} over {period}:**
+    bh_years = len(prices) / 252
+    bh_cagr = bh_total ** (1 / bh_years) - 1
+    _render_strategy_vs_bh_narrative(
+        ticker, period, metrics["total_return"], metrics["cagr"], bh_total, bh_cagr, n_trades,
+    )
 
-- The strategy returned **{(strat_total-1)*100:.1f}%** vs buy & hold's **{(bh_total-1)*100:.1f}%**.
-- {"The strategy beat buy & hold on CAGR (" + f"{strat_cagr*100:.1f}% vs {bh_cagr*100:.1f}%" + ")." if beat else "Buy & hold won on CAGR (" + f"{bh_cagr*100:.1f}% vs {strat_cagr*100:.1f}%" + "). This is common — active strategies have to clear a high bar."}
-- The strategy made **{n_trades} signal changes**. More trades = more transaction costs in real life.
-""")
-
-    # Persist result and mark lesson completed
-    user_id = st.session_state.get("learn_user_id")
-    lesson_id = st.session_state.get("learn_lesson")
-    if user_id and lesson_id:
-        save_backtest_log(user_id, lesson_id, ticker, strategy_name, period,
-                          strat_total - 1, strat_cagr, strat_max_dd, strat_sharpe, n_trades)
-        update_lesson_progress(user_id, lesson_id, "completed")
+    _save_backtest_result(ticker, strategy_name, period, metrics, n_trades)
 
 
 def _run_buy_and_hold_backtest(ticker, period, compare_sp500):
@@ -2172,77 +2178,41 @@ def _run_buy_and_hold_backtest(ticker, period, compare_sp500):
 
     prices = df["Close"].dropna()
 
-    # Compute metrics
+    # Unlike the signal-based strategies, buy-and-hold has no decision to delay a
+    # day for — you're long from day one — so equity is just normalised price,
+    # not run through the shift(1) position helper used elsewhere in this file.
     equity = prices / prices.iloc[0]
-    daily_returns = equity.pct_change().dropna()
-    years = len(prices) / 252
-    total_return = float(equity.iloc[-1])
-    cagr = total_return ** (1 / years) - 1
-    rolling_peak = equity.cummax()
-    drawdown = (equity - rolling_peak) / rolling_peak
-    max_drawdown = float(drawdown.min())
-    sharpe = float((daily_returns.mean() / daily_returns.std()) * np.sqrt(252))
+    daily_returns = equity.pct_change()
+    metrics = _backtest_metrics(prices, equity, daily_returns)
 
-    # Metrics row
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total Return", f"{(total_return - 1) * 100:.1f}%")
-    m2.metric("CAGR", f"{cagr * 100:.1f}%")
-    m3.metric("Max Drawdown", f"{max_drawdown * 100:.1f}%")
-    m4.metric("Sharpe Ratio", f"{sharpe:.2f}")
+    _render_metrics_row(metrics["total_return"], metrics["cagr"], metrics["max_drawdown"], metrics["sharpe"])
 
-    # Equity curve chart
     fig = go.Figure()
     fig.add_trace(go.Scatter(
-        x=equity.index,
-        y=equity.values,
-        name=ticker,
-        line=dict(color="cyan", width=2),
+        x=equity.index, y=equity.values, name=ticker, line=dict(color="cyan", width=2),
     ))
-
     if compare_sp500:
         with st.spinner("Loading S&P 500 data..."):
             sp_df = get_historical_data("^GSPC", period=period)
         if not sp_df.empty:
-            sp_eq = sp_df["Close"].dropna() / sp_df["Close"].dropna().iloc[0]
+            sp_equity = sp_df["Close"].dropna() / sp_df["Close"].dropna().iloc[0]
             fig.add_trace(go.Scatter(
-                x=sp_eq.index,
-                y=sp_eq.values,
-                name="S&P 500",
+                x=sp_equity.index, y=sp_equity.values, name="S&P 500",
                 line=dict(color="orange", width=2, dash="dot"),
             ))
-
     fig.update_layout(
         title=f"{ticker} Buy & Hold — Normalised Equity Curve (start = $1.00)",
-        template="plotly_dark",
-        height=420,
-        xaxis_title="Date",
-        yaxis_title="Portfolio Value ($)",
-        hovermode="x unified",
-        legend=dict(x=0, y=1),
+        template="plotly_dark", height=420,
+        xaxis_title="Date", yaxis_title="Portfolio Value ($)",
+        hovermode="x unified", legend=dict(x=0, y=1),
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # Drawdown chart
-    fig2 = go.Figure()
-    fig2.add_trace(go.Scatter(
-        x=drawdown.index,
-        y=drawdown.values * 100,
-        name="Drawdown",
-        fill="tozeroy",
-        line=dict(color="red", width=1),
-        fillcolor="rgba(255,50,50,0.25)",
-    ))
-    fig2.update_layout(
-        title=f"{ticker} Drawdown from Peak (%)",
-        template="plotly_dark",
-        height=250,
-        xaxis_title="Date",
-        yaxis_title="Drawdown (%)",
-        showlegend=False,
-    )
-    st.plotly_chart(fig2, use_container_width=True)
+    _render_drawdown_chart(metrics["drawdown"], title=f"{ticker} Drawdown from Peak (%)")
 
-    # Plain-English interpretation of the numbers
+    cagr, total_return, max_drawdown, sharpe = (
+        metrics["cagr"], metrics["total_return"], metrics["max_drawdown"], metrics["sharpe"],
+    )
     st.markdown(f"""
 **Reading these numbers for {ticker} over {period}:**
 
